@@ -2,7 +2,7 @@
 
 use crate::error::UwbErr;
 use crate::uci::uci_hrcv;
-use crate::uci::HALResponse;
+use crate::uci::HalCallback;
 use android_hardware_uwb::aidl::android::hardware::uwb::{
     IUwb::{BnUwb, IUwb},
     IUwbChip::{BnUwbChip, IUwbChip},
@@ -18,11 +18,11 @@ use std::result::Result;
 use tokio::sync::mpsc;
 
 pub struct UwbClientCallback {
-    rsp_sender: mpsc::UnboundedSender<HALResponse>,
+    rsp_sender: mpsc::UnboundedSender<HalCallback>,
 }
 
 impl UwbClientCallback {
-    fn new(rsp_sender: mpsc::UnboundedSender<HALResponse>) -> Self {
+    fn new(rsp_sender: mpsc::UnboundedSender<HalCallback>) -> Self {
         UwbClientCallback { rsp_sender }
     }
 }
@@ -30,20 +30,34 @@ impl UwbClientCallback {
 impl Interface for UwbClientCallback {}
 
 impl IUwbClientCallback for UwbClientCallback {
-    fn onHalEvent(&self, _event: UwbEvent, _event_status: UwbStatus) -> BinderResult<()> {
-        // TODO: Implement
+    fn onHalEvent(&self, event: UwbEvent, event_status: UwbStatus) -> BinderResult<()> {
+        self.rsp_sender
+            .send(HalCallback::Event { event, event_status })
+            .unwrap_or_else(|e| error!("Error sending evt callback: {:?}", e));
         Ok(())
     }
 
     fn onUciMessage(&self, data: &[u8]) -> BinderResult<()> {
-        let packet = uci_hrcv::uci_response(data);
-        match packet {
-            Ok(response) => {
-                if let Err(e) = self.rsp_sender.send(HALResponse::Uci(response)) {
-                    error!("Error sending uci response: {:?}", e);
-                }
-            }
-            Err(e) => error!("Error parsing uci response: {:?}", data),
+        // TODO: Response and Notification both use onUciMessage, Essentially
+        // we should be able to call a single function and get the type of
+        // packet was sent, blocked on b/204230081
+        let packetRsp = uci_hrcv::uci_response(data);
+        let packetNtf = uci_hrcv::uci_notification(data);
+
+        match (packetRsp, packetNtf) {
+            (Ok(_), Ok(_)) => error!(
+                "Packet parsed as both response and notification.
+                                This should be impossible, dropping packet."
+            ),
+            (Ok(response), _) => self
+                .rsp_sender
+                .send(HalCallback::UciRsp(response))
+                .unwrap_or_else(|e| error!("Error sending uci response: {:?}", e)),
+            (_, Ok(response)) => self
+                .rsp_sender
+                .send(HalCallback::UciNtf(response))
+                .unwrap_or_else(|e| error!("Error sending uci notification: {:?}", e)),
+            _ => error!("Unable to parse packet as either UCI or NTF: {:?}", data),
         }
         Ok(())
     }
@@ -78,11 +92,15 @@ fn get_hal_service() -> Option<Strong<dyn IUwbChip>> {
 #[derive(Clone)]
 pub struct UwbAdaptation {
     hal: Option<Strong<dyn IUwbChip>>,
+    rsp_sender: mpsc::UnboundedSender<HalCallback>,
 }
 
 impl UwbAdaptation {
-    pub fn new(hal: Option<Strong<dyn IUwbChip>>) -> UwbAdaptation {
-        UwbAdaptation { hal }
+    pub fn new(
+        hal: Option<Strong<dyn IUwbChip>>,
+        rsp_sender: mpsc::UnboundedSender<HalCallback>,
+    ) -> UwbAdaptation {
+        UwbAdaptation { hal, rsp_sender }
     }
 
     pub fn initialize(&mut self) {
@@ -100,9 +118,9 @@ impl UwbAdaptation {
         }
     }
 
-    fn hal_open(&self, rsp_sender: mpsc::UnboundedSender<HALResponse>) {
+    pub fn hal_open(&self) {
         let m_cback = BnUwbClientCallback::new_binder(
-            UwbClientCallback { rsp_sender },
+            UwbClientCallback { rsp_sender: self.rsp_sender.clone() },
             BinderFeatures::default(),
         );
         if let Some(hal) = &self.hal {
@@ -125,7 +143,7 @@ impl UwbAdaptation {
         Err(UwbErr::failed())
     }
 
-    fn session_initialization(&self, session_id: i32) -> Result<(), UwbErr> {
+    pub fn session_initialization(&self, session_id: i32) -> Result<(), UwbErr> {
         if let Some(hal) = &self.hal {
             return Ok(hal.sessionInit(session_id)?);
         }
@@ -146,7 +164,7 @@ impl UwbAdaptation {
         Err(UwbErr::failed())
     }
 
-    fn send_uci_message(&self, data: &[u8]) {
+    pub fn send_uci_message(&self, data: &[u8]) {
         if let Some(hal) = &self.hal {
             hal.sendUciMessage(data);
         } else {
@@ -163,7 +181,7 @@ mod tests {
     fn test_onHalEvent() {
         let uwb_event_test = UwbEvent(0);
         let uwb_status_test = UwbStatus(1);
-        let (rsp_sender, _) = mpsc::unbounded_channel::<HALResponse>();
+        let (rsp_sender, _) = mpsc::unbounded_channel::<HalCallback>();
         let uwb_client_callback_test = UwbClientCallback::new(rsp_sender);
         let result = uwb_client_callback_test.onHalEvent(uwb_event_test, uwb_status_test);
         assert_eq!(result, Ok(()));
@@ -175,24 +193,24 @@ mod tests {
             0x40, 0x02, 0x00, 0x0b, 0x01, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x01,
             0x0a,
         ];
-        let (rsp_sender, mut rsp_receiver) = mpsc::unbounded_channel::<HALResponse>();
+        let (rsp_sender, mut rsp_receiver) = mpsc::unbounded_channel::<HalCallback>();
         let uwb_client_callback_test = UwbClientCallback::new(rsp_sender);
         let result = uwb_client_callback_test.onUciMessage(&data);
         assert_eq!(result, Ok(()));
         let response = rsp_receiver.recv().await;
         assert!(matches!(
             response,
-            Some(HALResponse::Uci(uci_hrcv::UciResponse::GetDeviceInfoRsp(_)))
+            Some(HalCallback::UciRsp(uci_hrcv::UciResponse::GetDeviceInfoRsp(_)))
         ));
     }
 
     #[test]
     fn test_onUciMessage_bad() {
         let data = [
-            0x41, 0x02, 0x00, 0x0b, 0x01, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x01,
+            0x42, 0x02, 0x00, 0x0b, 0x01, 0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x01,
             0x0a,
         ];
-        let (rsp_sender, mut rsp_receiver) = mpsc::unbounded_channel::<HALResponse>();
+        let (rsp_sender, mut rsp_receiver) = mpsc::unbounded_channel::<HalCallback>();
         let uwb_client_callback_test = UwbClientCallback::new(rsp_sender);
         let result = uwb_client_callback_test.onUciMessage(&data);
         assert_eq!(result, Ok(()));
