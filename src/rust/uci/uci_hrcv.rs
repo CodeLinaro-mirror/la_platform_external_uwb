@@ -19,6 +19,12 @@ use log::{info, warn};
 use uwb_uci_packets::*;
 
 #[derive(Debug)]
+pub enum UciMessage {
+    Response(UciResponse),
+    Notification(UciNotification),
+}
+
+#[derive(Debug)]
 pub enum UciResponse {
     GetDeviceInfoRsp(GetDeviceInfoRspBuilder),
     GetCapsInfoRsp(GetCapsInfoRspBuilder),
@@ -49,8 +55,17 @@ pub enum UciNotification {
     ExtendedMacTwoWayRangeDataNtf(ExtendedMacTwoWayRangeDataNtfPacket),
 }
 
-pub fn uci_response(bytes: &[u8]) -> Result<UciResponse, UwbErr> {
-    let evt = UciResponsePacket::parse(bytes)?;
+pub fn uci_message(evt: UciPacketPacket) -> Result<UciMessage, UwbErr> {
+    match evt.specialize() {
+        UciPacketChild::UciResponse(evt) => Ok(UciMessage::Response(uci_response(evt).unwrap())),
+        UciPacketChild::UciNotification(evt) => {
+            Ok(UciMessage::Notification(uci_notification(evt).unwrap()))
+        }
+        _ => Err(UwbErr::Specialize(evt.to_vec())),
+    }
+}
+
+pub fn uci_response(evt: UciResponsePacket) -> Result<UciResponse, UwbErr> {
     match evt.specialize() {
         UciResponseChild::CoreResponse(evt) => core_response(evt),
         UciResponseChild::SessionResponse(evt) => session_response(evt),
@@ -60,8 +75,7 @@ pub fn uci_response(bytes: &[u8]) -> Result<UciResponse, UwbErr> {
     }
 }
 
-pub fn uci_notification(bytes: &[u8]) -> Result<UciNotification, UwbErr> {
-    let evt = UciNotificationPacket::parse(bytes)?;
+pub fn uci_notification(evt: UciNotificationPacket) -> Result<UciNotification, UwbErr> {
     match evt.specialize() {
         UciNotificationChild::CoreNotification(evt) => core_notification(evt),
         UciNotificationChild::SessionNotification(evt) => session_notification(evt),
