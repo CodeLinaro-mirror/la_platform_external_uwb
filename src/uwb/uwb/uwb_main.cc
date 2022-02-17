@@ -532,6 +532,20 @@ tUWB_STATUS UWB_GetCoreConfig(uint8_t num_ids, uint8_t* p_param_ids) {
 tUWB_STATUS UWB_SessionInit(uint32_t session_id, uint8_t session_type) {
   return uci_snd_session_init_cmd(session_id, session_type);
 }
+
+/*******************************************************************************
+**
+** Function         UWB_HalSessionInit
+**
+** Description      This function is called to send session init command to
+**                  HAL.
+** Returns          tUWB_STATUS
+**
+*******************************************************************************/
+tUWB_STATUS UWB_HalSessionInit(uint32_t session_id) {
+  return uwb_cb.p_hal->SessionInitialization(session_id);
+}
+
 /*******************************************************************************
 **
 ** Function         UWB_SessionDeInit
@@ -709,6 +723,25 @@ tUWB_STATUS UWB_MulticastListUpdate(uint32_t session_id, uint8_t action,
                                     uint32_t* subSessionIdList) {
   return uci_snd_multicast_list_update_cmd(session_id, action, noOfControlees,
                                            shortAddressList, subSessionIdList);
+}
+
+/*******************************************************************************
+**
+** Function       UWB_SetCountryCode
+**
+** Description    This function is called to send the country code set
+**                command.
+**                The response from UWBS is reported with an
+**                UWB_SESSION_SET_COUNTRY_CODE_REVT
+**                in the tUWB_RESPONSE_CBACK callback.
+**
+** Parameters     country_code - ISO Country code
+**
+** Returns          tUWB_STATUS
+**
+*******************************************************************************/
+tUWB_STATUS UWB_SetCountryCode(uint8_t* countryCode) {
+  return uci_snd_set_country_code_cmd(countryCode);
 }
 
 /*******************************************************************************

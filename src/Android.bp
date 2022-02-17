@@ -65,23 +65,27 @@ cc_library_static {
 filegroup {
     name: "libuwb_uci_rust_srcs",
     srcs: [
-        "rust/adaptation/src/lib.rs",
+        "rust/lib.rs",
     ],
 }
 
 rust_library {
     name: "libuwb_uci_rust",
     crate_name: "uwb_uci_rust",
-    srcs: [
-        ":libuwb_uci_rust_srcs",
-        ":UwbGeneratedPackets_rust",
-    ],
+    srcs: [":libuwb_uci_rust_srcs"],
     rustlibs: [
         "android.hardware.uwb-V1-rust",
-        "liblazy_static",
-        "libbinder_rs",
+        "libanyhow",
         "libbinder_ndk_sys",
+        "libbinder_rs",
+        "libjni",
+        "liblazy_static",
         "liblog_rust",
+        "liblogger",
+        "libnum_traits",
+        "libthiserror",
+        "libtokio",
+        "libuwb_uci_packets",
     ],
     shared_libs: [
         "libbase",
@@ -96,16 +100,23 @@ rust_library {
 
 rust_test {
     name: "libuwb_uci_rust_tests",
-    srcs: [
-        ":libuwb_uci_rust_srcs",
-    ],
+    srcs: [":libuwb_uci_rust_srcs"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
     rustlibs:[
-        "libuwb_uci_rust",
         "android.hardware.uwb-V1-rust",
+        "libanyhow",
+        "libbinder_rs",
+        "libjni",
+        "liblazy_static",
         "liblog_rust",
-        ],
+        "liblogger",
+        "libnum_traits",
+        "libthiserror",
+        "libtokio",
+        "libuwb_uci_packets",
+        "libuwb_uci_rust",
+    ],
 }
 
 rust_test {
@@ -117,13 +128,29 @@ rust_test {
     auto_gen_config: true,
     proc_macros: ["libnum_derive"],
     rustlibs:[
-        "libuwb_uci_rust",
         "android.hardware.uwb-V1-rust",
+        "libbytes",
         "liblog_rust",
+        "libnum_traits",
+        "libthiserror",
+        "libuwb_uci_rust",
+    ],
+}
+
+rust_library {
+    name: "libuwb_uci_packets",
+    crate_name: "uwb_uci_packets",
+    srcs: [":UwbGeneratedPackets_rust"],
+    proc_macros: ["libnum_derive"],
+    rustlibs: [
         "libbytes",
         "libnum_traits",
         "libthiserror",
-        ],
+    ],
+    apex_available: [
+        "com.android.uwb",
+    ],
+    min_sdk_version: "current", // TODO: Move to 32 once SDK is finalized
 }
 
 genrule {
