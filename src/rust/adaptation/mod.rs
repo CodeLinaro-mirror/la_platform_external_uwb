@@ -16,6 +16,7 @@ use android_hardware_uwb::binder::{
 use log::{error, info, warn};
 use std::result::Result;
 use tokio::sync::mpsc;
+use uwb_uci_packets::{UciPacketChild, UciPacketPacket};
 
 pub struct UwbClientCallback {
     rsp_sender: mpsc::UnboundedSender<HalCallback>,
@@ -38,26 +39,24 @@ impl IUwbClientCallback for UwbClientCallback {
     }
 
     fn onUciMessage(&self, data: &[u8]) -> BinderResult<()> {
-        // TODO: Response and Notification both use onUciMessage, Essentially
-        // we should be able to call a single function and get the type of
-        // packet was sent, blocked on b/204230081
-        let packetRsp = uci_hrcv::uci_response(data);
-        let packetNtf = uci_hrcv::uci_notification(data);
+        match UciPacketPacket::parse(data) {
+            Ok(evt) => {
+                let packetMsg = uci_hrcv::uci_message(evt);
+                match packetMsg {
+                    Ok(uci_hrcv::UciMessage::Response(evt)) => self
+                        .rsp_sender
+                        .send(HalCallback::UciRsp(evt))
+                        .unwrap_or_else(|e| error!("Error sending uci response: {:?}", e)),
 
-        match (packetRsp, packetNtf) {
-            (Ok(_), Ok(_)) => error!(
-                "Packet parsed as both response and notification.
-                                This should be impossible, dropping packet."
-            ),
-            (Ok(response), _) => self
-                .rsp_sender
-                .send(HalCallback::UciRsp(response))
-                .unwrap_or_else(|e| error!("Error sending uci response: {:?}", e)),
-            (_, Ok(response)) => self
-                .rsp_sender
-                .send(HalCallback::UciNtf(response))
-                .unwrap_or_else(|e| error!("Error sending uci notification: {:?}", e)),
-            _ => error!("Unable to parse packet as either UCI or NTF: {:?}", data),
+                    Ok(uci_hrcv::UciMessage::Notification(evt)) => self
+                        .rsp_sender
+                        .send(HalCallback::UciNtf(evt))
+                        .unwrap_or_else(|e| error!("Error sending uci notification: {:?}", e)),
+
+                    _ => error!("UCI message which is neither a UCI RSP or NTF: {:?}", data),
+                }
+            }
+            _ => error!("Failed to parse packet: {:?}", data),
         }
         Ok(())
     }
@@ -130,7 +129,7 @@ impl UwbAdaptation {
         }
     }
 
-    fn hal_close(&self) {
+    pub fn hal_close(&self) {
         if let Some(hal) = &self.hal {
             hal.close();
         }

@@ -27,11 +27,14 @@ use std::vec::Vec;
 use uwb_uci_packets::{
     DeviceStatusNtfPacket, ExtendedAddressTwoWayRangingMeasurement,
     ExtendedMacTwoWayRangeDataNtfPacket, GenericErrorPacket, RangeDataNtfPacket,
-    SessionStatusNtfPacket, ShortAddressTwoWayRangingMeasurement, ShortMacTwoWayRangeDataNtfPacket,
+    SessionStatusNtfPacket, SessionUpdateControllerMulticastListNtfPacket,
+    ShortAddressTwoWayRangingMeasurement, ShortMacTwoWayRangeDataNtfPacket,
 };
 
 const UWB_RANGING_DATA_CLASS: &str = "com/android/uwb/data/UwbRangingData";
 const UWB_TWO_WAY_MEASUREMENT_CLASS: &str = "com/android/uwb/data/UwbTwoWayMeasurement";
+const MULTICAST_LIST_UPDATE_STATUS_CLASS: &str =
+    "com/android/uwb/data/UwbMulticastListUpdateStatus";
 const SHORT_MAC_ADDRESS_LEN: usize = 2;
 const EXTENDED_MAC_ADDRESS_LEN: usize = 8;
 
@@ -45,12 +48,77 @@ const EXTENDED_MAC_ADDRESS_LEN: usize = 8;
 // TODO: We could consider caching the method ids rather than recomputing them each time at the cost
 // of less safety.
 
+pub trait Manager {
+    fn device_status_notification_received(&self, data: DeviceStatusNtfPacket) -> Result<()>;
+    fn core_generic_error_notification_received(&self, data: GenericErrorPacket) -> Result<()>;
+    fn session_status_notification_received(&self, data: SessionStatusNtfPacket) -> Result<()>;
+    fn short_range_data_notification(&self, data: ShortMacTwoWayRangeDataNtfPacket) -> Result<()>;
+    fn extended_range_data_notification(
+        &self,
+        data: ExtendedMacTwoWayRangeDataNtfPacket,
+    ) -> Result<()>;
+    fn session_update_controller_multicast_list_notification(
+        &self,
+        data: SessionUpdateControllerMulticastListNtfPacket,
+    ) -> Result<()>;
+}
+
 // Manages calling Java callbacks through the JNI.
 pub struct EventManager {
     jvm: JavaVM,
     obj: GlobalRef,
     // cache used to lookup uwb classes in callback.
     class_loader_obj: GlobalRef,
+}
+
+impl Manager for EventManager {
+    fn device_status_notification_received(&self, data: DeviceStatusNtfPacket) -> Result<()> {
+        let env = self.jvm.attach_current_thread()?;
+        let result = self.handle_device_status_notification_received(&env, data);
+        self.clear_exception(env);
+        result
+    }
+
+    fn core_generic_error_notification_received(&self, data: GenericErrorPacket) -> Result<()> {
+        let env = self.jvm.attach_current_thread()?;
+        let result = self.handle_core_generic_error_notification_received(&env, data);
+        self.clear_exception(env);
+        result
+    }
+
+    fn session_status_notification_received(&self, data: SessionStatusNtfPacket) -> Result<()> {
+        let env = self.jvm.attach_current_thread()?;
+        let result = self.handle_session_status_notification_received(&env, data);
+        self.clear_exception(env);
+        result
+    }
+
+    fn short_range_data_notification(&self, data: ShortMacTwoWayRangeDataNtfPacket) -> Result<()> {
+        let env = self.jvm.attach_current_thread()?;
+        let result = self.handle_short_range_data_notification(&env, data);
+        self.clear_exception(env);
+        result
+    }
+
+    fn extended_range_data_notification(
+        &self,
+        data: ExtendedMacTwoWayRangeDataNtfPacket,
+    ) -> Result<()> {
+        let env = self.jvm.attach_current_thread()?;
+        let result = self.handle_extended_range_data_notification(&env, data);
+        self.clear_exception(env);
+        result
+    }
+
+    fn session_update_controller_multicast_list_notification(
+        &self,
+        data: SessionUpdateControllerMulticastListNtfPacket,
+    ) -> Result<()> {
+        let env = self.jvm.attach_current_thread()?;
+        let result = self.handle_session_update_controller_multicast_list_notification(&env, data);
+        self.clear_exception(env);
+        result
+    }
 }
 
 impl EventManager {
@@ -107,13 +175,6 @@ impl EventManager {
         .map(|_| ()) // drop void method return
     }
 
-    pub fn device_status_notification_received(&self, data: DeviceStatusNtfPacket) -> Result<()> {
-        let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_device_status_notification_received(&env, data);
-        self.clear_exception(env);
-        result
-    }
-
     fn handle_session_status_notification_received(
         &self,
         env: &JNIEnv,
@@ -124,7 +185,7 @@ impl EventManager {
         let state =
             data.get_session_state().to_i32().expect("Failed converting session_state to i32");
         let reason_code =
-            data.get_reason_code().to_i32().expect("Failed coverting reason_code to i32");
+            data.get_reason_code().to_i32().expect("Failed converting reason_code to i32");
         env.call_method(
             self.obj.as_obj(),
             "onSessionStatusNotificationReceived",
@@ -132,13 +193,6 @@ impl EventManager {
             &[JValue::Long(session_id), JValue::Int(state), JValue::Int(reason_code)],
         )
         .map(|_| ()) // drop void method return
-    }
-
-    pub fn session_status_notification_received(&self, data: SessionStatusNtfPacket) -> Result<()> {
-        let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_session_status_notification_received(&env, data);
-        self.clear_exception(env);
-        result
     }
 
     fn handle_core_generic_error_notification_received(
@@ -154,13 +208,6 @@ impl EventManager {
             &[JValue::Int(status)],
         )
         .map(|_| ()) // drop void method return
-    }
-
-    pub fn core_generic_error_notification_received(&self, data: GenericErrorPacket) -> Result<()> {
-        let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_core_generic_error_notification_received(&env, data);
-        self.clear_exception(env);
-        result
     }
 
     fn create_zeroed_two_way_measurement_java<'a>(
@@ -240,7 +287,7 @@ impl EventManager {
                     two_way_measurement
                         .aoa_elevation_fom
                         .to_i32()
-                        .expect("Failed converting aoa elevaion fom to i32"),
+                        .expect("Failed converting aoa elevation fom to i32"),
                 ),
                 JValue::Int(
                     two_way_measurement
@@ -327,7 +374,7 @@ impl EventManager {
                     two_way_measurement
                         .aoa_elevation_fom
                         .to_i32()
-                        .expect("Failed converting aoa elevaion fom to i32"),
+                        .expect("Failed converting aoa elevation fom to i32"),
                 ),
                 JValue::Int(
                     two_way_measurement
@@ -389,7 +436,7 @@ impl EventManager {
                 JValue::Long(
                     data.get_current_ranging_interval()
                         .to_i64()
-                        .expect("Failed converting curr ranging interval to i32"),
+                        .expect("Failed converting current ranging interval to i32"),
                 ),
                 JValue::Int(
                     data.get_ranging_measurement_type()
@@ -460,16 +507,6 @@ impl EventManager {
         .map(|_| ()) // drop void method return
     }
 
-    pub fn short_range_data_notification(
-        &self,
-        data: ShortMacTwoWayRangeDataNtfPacket,
-    ) -> Result<()> {
-        let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_short_range_data_notification(&env, data);
-        self.clear_exception(env);
-        result
-    }
-
     fn handle_extended_range_data_notification(
         &self,
         env: &JNIEnv,
@@ -524,14 +561,61 @@ impl EventManager {
         .map(|_| ()) // drop void method return
     }
 
-    pub fn extended_range_data_notification(
+    pub fn handle_session_update_controller_multicast_list_notification(
         &self,
-        data: ExtendedMacTwoWayRangeDataNtfPacket,
+        env: &JNIEnv,
+        data: SessionUpdateControllerMulticastListNtfPacket,
     ) -> Result<()> {
         let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_extended_range_data_notification(&env, data);
-        self.clear_exception(env);
-        result
+        let uwb_multicast_update_class =
+            self.find_class(&env, &MULTICAST_LIST_UPDATE_STATUS_CLASS)?;
+
+        let controlee_status = data.get_controlee_status();
+        let count: i32 =
+            controlee_status.len().try_into().expect("Failed to convert controlee status length");
+        let mut mac_address_list: Vec<i32> = Vec::new();
+        let mut subsession_id_list: Vec<i64> = Vec::new();
+        let mut status_list: Vec<i32> = Vec::new();
+
+        for iter in controlee_status {
+            mac_address_list.push(iter.mac_address.into());
+            subsession_id_list.push(iter.subsession_id.into());
+            status_list.push(iter.status.into());
+        }
+
+        let mut mac_address_jintarray = env.new_int_array(count)?;
+        env.set_int_array_region(mac_address_jintarray, 0, mac_address_list.as_ref());
+        let mut subsession_id_jlongarray = env.new_long_array(count)?;
+        env.set_long_array_region(subsession_id_jlongarray, 0, subsession_id_list.as_ref());
+        let mut status_jintarray = env.new_int_array(count)?;
+        env.set_int_array_region(status_jintarray, 0, status_list.as_ref());
+
+        let uwb_multicast_update_object = env.new_object(
+            uwb_multicast_update_class,
+            "(JII[I[J[I)V",
+            &[
+                JValue::Long(
+                    data.get_session_id().try_into().expect("Could not convert session_id"),
+                ),
+                JValue::Int(
+                    data.get_remaining_multicast_list_size()
+                        .try_into()
+                        .expect("Could not convert remaining multicast list size"),
+                ),
+                JValue::Int(count.try_into().expect("Could not convert count")),
+                JValue::Object(JObject::from(mac_address_jintarray)),
+                JValue::Object(JObject::from(subsession_id_jlongarray)),
+                JValue::Object(JObject::from(status_jintarray)),
+            ],
+        )?;
+
+        env.call_method(
+            self.obj.as_obj(),
+            "onMulticastListUpdateNotificationReceived",
+            "(Lcom/android/uwb/data/UwbMulticastListUpdateStatus;)V",
+            &[JValue::Object(JObject::from(uwb_multicast_update_object))],
+        )
+        .map(|_| ()) // drop void method return
     }
 
     // Attempts to clear an exception.  If we do not do this, the exception continues being thrown
@@ -546,5 +630,43 @@ impl EventManager {
             Ok(false) => {} // No exception found.
             Err(e) => error!("Error checking JNI exception: {:?}", e),
         }
+    }
+}
+
+#[cfg(test)]
+pub struct EventManagerTest {}
+
+#[cfg(test)]
+impl EventManagerTest {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[cfg(test)]
+impl Manager for EventManagerTest {
+    fn device_status_notification_received(&self, data: DeviceStatusNtfPacket) -> Result<()> {
+        Ok(())
+    }
+    fn core_generic_error_notification_received(&self, data: GenericErrorPacket) -> Result<()> {
+        Ok(())
+    }
+    fn session_status_notification_received(&self, data: SessionStatusNtfPacket) -> Result<()> {
+        Ok(())
+    }
+    fn short_range_data_notification(&self, data: ShortMacTwoWayRangeDataNtfPacket) -> Result<()> {
+        Ok(())
+    }
+    fn extended_range_data_notification(
+        &self,
+        data: ExtendedMacTwoWayRangeDataNtfPacket,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn session_update_controller_multicast_list_notification(
+        &self,
+        data: SessionUpdateControllerMulticastListNtfPacket,
+    ) -> Result<()> {
+        Ok(())
     }
 }
