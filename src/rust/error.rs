@@ -47,8 +47,12 @@ pub enum UwbErr {
     ConvertToArray(#[from] TryFromSliceError),
     #[error("The dispatcher does not exist")]
     NoneDispatcher,
+    #[error("Invalid args")]
+    InvalidArgs,
     #[error("Exit")]
     Exit,
+    #[error("Could not connect to HAL")]
+    HalUnavailable(#[from] binder::StatusCode),
     #[error("Unknown error")]
     Undefined,
 }

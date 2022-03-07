@@ -15,7 +15,7 @@
  */
 
 use crate::error::UwbErr;
-use log::{info, warn};
+use num_traits::ToPrimitive;
 use uwb_uci_packets::*;
 
 #[derive(Debug)]
@@ -26,23 +26,26 @@ pub enum UciMessage {
 
 #[derive(Debug)]
 pub enum UciResponse {
-    GetDeviceInfoRsp(GetDeviceInfoRspBuilder),
-    GetCapsInfoRsp(GetCapsInfoRspBuilder),
-    SetConfigRsp(SetConfigRspBuilder),
-    GetConfigRsp(GetConfigRspBuilder),
-    DeviceResetRsp(DeviceResetRspBuilder),
-    SessionInitRsp(SessionInitRspBuilder),
-    SessionDeinitRsp(SessionDeinitRspBuilder),
-    SessionGetAppConfigRsp(SessionGetAppConfigRspBuilder),
-    SessionSetAppConfigRsp(SessionSetAppConfigRspBuilder),
-    SessionGetStateRsp(SessionGetStateRspBuilder),
-    SessionGetCountRsp(SessionGetCountRspBuilder),
-    SessionUpdateControllerMulticastListRsp(SessionUpdateControllerMulticastListRspBuilder),
-    RangeStartRsp(RangeStartRspBuilder),
-    RangeStopRsp(RangeStopRspBuilder),
-    RangeGetRangingCountRsp(RangeGetRangingCountRspBuilder),
-    AndroidSetCountryCodeRsp(AndroidSetCountryCodeRspBuilder),
-    AndroidGetPowerStatsRsp(AndroidGetPowerStatsRspBuilder),
+    GetDeviceInfoRsp(GetDeviceInfoRspPacket),
+    GetCapsInfoRsp(GetCapsInfoRspPacket),
+    SetConfigRsp(SetConfigRspPacket),
+    GetConfigRsp(GetConfigRspPacket),
+    DeviceResetRsp(DeviceResetRspPacket),
+    SessionInitRsp(SessionInitRspPacket),
+    SessionDeinitRsp(SessionDeinitRspPacket),
+    SessionGetAppConfigRsp(SessionGetAppConfigRspPacket),
+    SessionSetAppConfigRsp(SessionSetAppConfigRspPacket),
+    SessionGetStateRsp(SessionGetStateRspPacket),
+    SessionGetCountRsp(SessionGetCountRspPacket),
+    SessionUpdateControllerMulticastListRsp(SessionUpdateControllerMulticastListRspPacket),
+    RangeStartRsp(RangeStartRspPacket),
+    RangeStopRsp(RangeStopRspPacket),
+    RangeGetRangingCountRsp(RangeGetRangingCountRspPacket),
+    AndroidSetCountryCodeRsp(AndroidSetCountryCodeRspPacket),
+    AndroidGetPowerStatsRsp(AndroidGetPowerStatsRspPacket),
+    // TODO: Ideally if the PDL supported packet hierarchy better, we could have
+    // done - RawVendorRsp(UciResponsePacket).
+    RawVendorRsp { gid: u32, oid: u32, payload: Vec<u8> },
 }
 
 #[derive(Debug)]
@@ -53,6 +56,9 @@ pub enum UciNotification {
     SessionUpdateControllerMulticastListNtf(SessionUpdateControllerMulticastListNtfPacket),
     ShortMacTwoWayRangeDataNtf(ShortMacTwoWayRangeDataNtfPacket),
     ExtendedMacTwoWayRangeDataNtf(ExtendedMacTwoWayRangeDataNtfPacket),
+    // TODO: Ideally if the PDL supported packet hierarchy better, we could have
+    // done - RawVendorNtf(UciNotificationPacket).
+    RawVendorNtf { gid: u32, oid: u32, payload: Vec<u8> },
 }
 
 pub fn uci_message(evt: UciPacketPacket) -> Result<UciMessage, UwbErr> {
@@ -71,6 +77,62 @@ pub fn uci_response(evt: UciResponsePacket) -> Result<UciResponse, UwbErr> {
         UciResponseChild::SessionResponse(evt) => session_response(evt),
         UciResponseChild::RangingResponse(evt) => ranging_response(evt),
         UciResponseChild::AndroidResponse(evt) => android_response(evt),
+        // TODO: This is ugly! But, needed because of pdl limitations.
+        UciResponseChild::UciVendor_9_Response(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_9_ResponseChild::Payload(payload) => payload.to_vec(),
+                UciVendor_9_ResponseChild::None => Vec::new(),
+            };
+            vendor_response(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciResponseChild::UciVendor_A_Response(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_A_ResponseChild::Payload(payload) => payload.to_vec(),
+                UciVendor_A_ResponseChild::None => Vec::new(),
+            };
+            vendor_response(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciResponseChild::UciVendor_B_Response(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_B_ResponseChild::Payload(payload) => payload.to_vec(),
+                UciVendor_B_ResponseChild::None => Vec::new(),
+            };
+            vendor_response(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciResponseChild::UciVendor_C_Response(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_C_ResponseChild::Payload(payload) => payload.to_vec(),
+                UciVendor_C_ResponseChild::None => Vec::new(),
+            };
+            vendor_response(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciResponseChild::UciVendor_F_Response(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_F_ResponseChild::Payload(payload) => payload.to_vec(),
+                UciVendor_F_ResponseChild::None => Vec::new(),
+            };
+            vendor_response(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
 }
@@ -80,31 +142,92 @@ pub fn uci_notification(evt: UciNotificationPacket) -> Result<UciNotification, U
         UciNotificationChild::CoreNotification(evt) => core_notification(evt),
         UciNotificationChild::SessionNotification(evt) => session_notification(evt),
         UciNotificationChild::RangingNotification(evt) => ranging_notification(evt),
+        UciNotificationChild::AndroidNotification(evt) => android_notification(evt),
+        // TODO: This is ugly! But, needed because of pdl limitations.
+        UciNotificationChild::UciVendor_9_Notification(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_9_NotificationChild::Payload(payload) => payload.to_vec(),
+                UciVendor_9_NotificationChild::None => Vec::new(),
+            };
+            vendor_notification(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciNotificationChild::UciVendor_A_Notification(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_A_NotificationChild::Payload(payload) => payload.to_vec(),
+                UciVendor_A_NotificationChild::None => Vec::new(),
+            };
+            vendor_notification(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciNotificationChild::UciVendor_B_Notification(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_B_NotificationChild::Payload(payload) => payload.to_vec(),
+                UciVendor_B_NotificationChild::None => Vec::new(),
+            };
+            vendor_notification(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciNotificationChild::UciVendor_C_Notification(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_C_NotificationChild::Payload(payload) => payload.to_vec(),
+                UciVendor_C_NotificationChild::None => Vec::new(),
+            };
+            vendor_notification(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
+        UciNotificationChild::UciVendor_F_Notification(evt) => {
+            let payload = match evt.specialize() {
+                UciVendor_F_NotificationChild::Payload(payload) => payload.to_vec(),
+                UciVendor_F_NotificationChild::None => Vec::new(),
+            };
+            vendor_notification(
+                evt.get_group_id().to_u32().unwrap(),
+                evt.get_opcode().to_u32().unwrap(),
+                payload,
+            )
+        }
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
 }
 
 fn core_response(evt: CoreResponsePacket) -> Result<UciResponse, UwbErr> {
     match evt.specialize() {
-        CoreResponseChild::GetDeviceInfoRsp(evt) => Ok(get_device_info_rsp(evt)),
-        CoreResponseChild::GetCapsInfoRsp(evt) => Ok(get_caps_info_rsp(evt)),
-        CoreResponseChild::SetConfigRsp(evt) => Ok(set_config_rsp(evt)),
-        CoreResponseChild::GetConfigRsp(evt) => Ok(get_config_rsp(evt)),
-        CoreResponseChild::DeviceResetRsp(evt) => Ok(device_reset_rsp(evt)),
+        CoreResponseChild::GetDeviceInfoRsp(evt) => Ok(UciResponse::GetDeviceInfoRsp(evt)),
+        CoreResponseChild::GetCapsInfoRsp(evt) => Ok(UciResponse::GetCapsInfoRsp(evt)),
+        CoreResponseChild::SetConfigRsp(evt) => Ok(UciResponse::SetConfigRsp(evt)),
+        CoreResponseChild::GetConfigRsp(evt) => Ok(UciResponse::GetConfigRsp(evt)),
+        CoreResponseChild::DeviceResetRsp(evt) => Ok(UciResponse::DeviceResetRsp(evt)),
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
 }
 
 fn session_response(evt: SessionResponsePacket) -> Result<UciResponse, UwbErr> {
     match evt.specialize() {
-        SessionResponseChild::SessionInitRsp(evt) => Ok(session_init_rsp(evt)),
-        SessionResponseChild::SessionDeinitRsp(evt) => Ok(session_deinit_rsp(evt)),
-        SessionResponseChild::SessionSetAppConfigRsp(evt) => Ok(session_set_app_config_rsp(evt)),
-        SessionResponseChild::SessionGetAppConfigRsp(evt) => Ok(session_get_app_config_rsp(evt)),
-        SessionResponseChild::SessionGetStateRsp(evt) => Ok(session_get_state_rsp(evt)),
-        SessionResponseChild::SessionGetCountRsp(evt) => Ok(session_get_count_rsp(evt)),
+        SessionResponseChild::SessionInitRsp(evt) => Ok(UciResponse::SessionInitRsp(evt)),
+        SessionResponseChild::SessionDeinitRsp(evt) => Ok(UciResponse::SessionDeinitRsp(evt)),
+        SessionResponseChild::SessionSetAppConfigRsp(evt) => {
+            Ok(UciResponse::SessionSetAppConfigRsp(evt))
+        }
+        SessionResponseChild::SessionGetAppConfigRsp(evt) => {
+            Ok(UciResponse::SessionGetAppConfigRsp(evt))
+        }
+        SessionResponseChild::SessionGetStateRsp(evt) => Ok(UciResponse::SessionGetStateRsp(evt)),
+        SessionResponseChild::SessionGetCountRsp(evt) => Ok(UciResponse::SessionGetCountRsp(evt)),
         SessionResponseChild::SessionUpdateControllerMulticastListRsp(evt) => {
-            Ok(session_update_controller_multicast_list_rsp(evt))
+            Ok(UciResponse::SessionUpdateControllerMulticastListRsp(evt))
         }
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
@@ -112,9 +235,11 @@ fn session_response(evt: SessionResponsePacket) -> Result<UciResponse, UwbErr> {
 
 fn ranging_response(evt: RangingResponsePacket) -> Result<UciResponse, UwbErr> {
     match evt.specialize() {
-        RangingResponseChild::RangeStartRsp(evt) => Ok(range_start_rsp(evt)),
-        RangingResponseChild::RangeStopRsp(evt) => Ok(range_stop_rsp(evt)),
-        RangingResponseChild::RangeGetRangingCountRsp(evt) => Ok(range_get_ranging_count_rsp(evt)),
+        RangingResponseChild::RangeStartRsp(evt) => Ok(UciResponse::RangeStartRsp(evt)),
+        RangingResponseChild::RangeStopRsp(evt) => Ok(UciResponse::RangeStopRsp(evt)),
+        RangingResponseChild::RangeGetRangingCountRsp(evt) => {
+            Ok(UciResponse::RangeGetRangingCountRsp(evt))
+        }
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
 }
@@ -122,11 +247,17 @@ fn ranging_response(evt: RangingResponsePacket) -> Result<UciResponse, UwbErr> {
 fn android_response(evt: AndroidResponsePacket) -> Result<UciResponse, UwbErr> {
     match evt.specialize() {
         AndroidResponseChild::AndroidSetCountryCodeRsp(evt) => {
-            Ok(android_set_country_code_rsp(evt))
+            Ok(UciResponse::AndroidSetCountryCodeRsp(evt))
         }
-        AndroidResponseChild::AndroidGetPowerStatsRsp(evt) => Ok(android_get_power_start_rsp(evt)),
+        AndroidResponseChild::AndroidGetPowerStatsRsp(evt) => {
+            Ok(UciResponse::AndroidGetPowerStatsRsp(evt))
+        }
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
+}
+
+fn vendor_response(gid: u32, oid: u32, payload: Vec<u8>) -> Result<UciResponse, UwbErr> {
+    Ok(UciResponse::RawVendorRsp { gid, oid, payload })
 }
 
 fn core_notification(evt: CoreNotificationPacket) -> Result<UciNotification, UwbErr> {
@@ -151,119 +282,12 @@ fn session_notification(evt: SessionNotificationPacket) -> Result<UciNotificatio
 
 fn ranging_notification(evt: RangingNotificationPacket) -> Result<UciNotification, UwbErr> {
     match evt.specialize() {
-        RangingNotificationChild::RangeDataNtf(evt) => range_data_ntf(evt),
+        RangingNotificationChild::RangeDataNtf(evt) => range_data_notification(evt),
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
 }
 
-fn get_device_info_rsp(evt: GetDeviceInfoRspPacket) -> UciResponse {
-    let evt_data = GetDeviceInfoRspBuilder {
-        status: evt.get_status(),
-        uci_version: evt.get_uci_version(),
-        mac_version: evt.get_mac_version(),
-        phy_version: evt.get_phy_version(),
-        uci_test_version: evt.get_uci_test_version(),
-        vendor_spec_info: evt.get_vendor_spec_info().to_vec(),
-    };
-    UciResponse::GetDeviceInfoRsp(evt_data)
-}
-
-fn get_caps_info_rsp(evt: GetCapsInfoRspPacket) -> UciResponse {
-    let evt_data =
-        GetCapsInfoRspBuilder { status: evt.get_status(), tlvs: evt.get_tlvs().to_vec() };
-    UciResponse::GetCapsInfoRsp(evt_data)
-}
-
-fn set_config_rsp(evt: SetConfigRspPacket) -> UciResponse {
-    let evt_data =
-        SetConfigRspBuilder { status: evt.get_status(), cfg_status: evt.get_cfg_status().to_vec() };
-    UciResponse::SetConfigRsp(evt_data)
-}
-
-fn get_config_rsp(evt: GetConfigRspPacket) -> UciResponse {
-    let evt_data = GetConfigRspBuilder { status: evt.get_status(), tlvs: evt.get_tlvs().to_vec() };
-    UciResponse::GetConfigRsp(evt_data)
-}
-
-fn device_reset_rsp(evt: DeviceResetRspPacket) -> UciResponse {
-    let evt_data = DeviceResetRspBuilder { status: evt.get_status() };
-    UciResponse::DeviceResetRsp(evt_data)
-}
-
-fn session_init_rsp(evt: SessionInitRspPacket) -> UciResponse {
-    let evt_data = SessionInitRspBuilder { status: evt.get_status() };
-    UciResponse::SessionInitRsp(evt_data)
-}
-
-fn session_deinit_rsp(evt: SessionDeinitRspPacket) -> UciResponse {
-    let evt_data = SessionDeinitRspBuilder { status: evt.get_status() };
-    UciResponse::SessionDeinitRsp(evt_data)
-}
-
-fn session_set_app_config_rsp(evt: SessionSetAppConfigRspPacket) -> UciResponse {
-    let evt_data = SessionSetAppConfigRspBuilder {
-        status: evt.get_status(),
-        cfg_status: evt.get_cfg_status().to_vec(),
-    };
-    UciResponse::SessionSetAppConfigRsp(evt_data)
-}
-
-fn session_get_app_config_rsp(evt: SessionGetAppConfigRspPacket) -> UciResponse {
-    let evt_data =
-        SessionGetAppConfigRspBuilder { status: evt.get_status(), tlvs: evt.get_tlvs().to_vec() };
-    UciResponse::SessionGetAppConfigRsp(evt_data)
-}
-
-fn session_get_state_rsp(evt: SessionGetStateRspPacket) -> UciResponse {
-    let evt_data = SessionGetStateRspBuilder {
-        status: evt.get_status(),
-        session_state: evt.get_session_state(),
-    };
-    UciResponse::SessionGetStateRsp(evt_data)
-}
-
-fn session_get_count_rsp(evt: SessionGetCountRspPacket) -> UciResponse {
-    let evt_data = SessionGetCountRspBuilder {
-        status: evt.get_status(),
-        session_count: evt.get_session_count(),
-    };
-    UciResponse::SessionGetCountRsp(evt_data)
-}
-
-fn session_update_controller_multicast_list_rsp(
-    evt: SessionUpdateControllerMulticastListRspPacket,
-) -> UciResponse {
-    let evt_data = SessionUpdateControllerMulticastListRspBuilder { status: evt.get_status() };
-    UciResponse::SessionUpdateControllerMulticastListRsp(evt_data)
-}
-
-fn range_start_rsp(evt: RangeStartRspPacket) -> UciResponse {
-    let evt_data = RangeStartRspBuilder { status: evt.get_status() };
-    UciResponse::RangeStartRsp(evt_data)
-}
-
-fn range_stop_rsp(evt: RangeStopRspPacket) -> UciResponse {
-    let evt_data = RangeStopRspBuilder { status: evt.get_status() };
-    UciResponse::RangeStopRsp(evt_data)
-}
-
-fn range_get_ranging_count_rsp(evt: RangeGetRangingCountRspPacket) -> UciResponse {
-    let evt_data =
-        RangeGetRangingCountRspBuilder { status: evt.get_status(), count: evt.get_count() };
-    UciResponse::RangeGetRangingCountRsp(evt_data)
-}
-
-fn android_set_country_code_rsp(evt: AndroidSetCountryCodeRspPacket) -> UciResponse {
-    let evt_data = AndroidSetCountryCodeRspBuilder { status: evt.get_status() };
-    UciResponse::AndroidSetCountryCodeRsp(evt_data)
-}
-
-fn android_get_power_start_rsp(evt: AndroidGetPowerStatsRspPacket) -> UciResponse {
-    let evt_data = AndroidGetPowerStatsRspBuilder { stats: evt.get_stats().clone() };
-    UciResponse::AndroidGetPowerStatsRsp(evt_data)
-}
-
-fn range_data_ntf(evt: RangeDataNtfPacket) -> Result<UciNotification, UwbErr> {
+fn range_data_notification(evt: RangeDataNtfPacket) -> Result<UciNotification, UwbErr> {
     match evt.specialize() {
         RangeDataNtfChild::ShortMacTwoWayRangeDataNtf(evt) => {
             Ok(UciNotification::ShortMacTwoWayRangeDataNtf(evt))
@@ -273,4 +297,12 @@ fn range_data_ntf(evt: RangeDataNtfPacket) -> Result<UciNotification, UwbErr> {
         }
         _ => Err(UwbErr::Specialize(evt.to_vec())),
     }
+}
+
+fn android_notification(evt: AndroidNotificationPacket) -> Result<UciNotification, UwbErr> {
+    Err(UwbErr::Specialize(evt.to_vec()))
+}
+
+fn vendor_notification(gid: u32, oid: u32, payload: Vec<u8>) -> Result<UciNotification, UwbErr> {
+    Ok(UciNotification::RawVendorNtf { gid, oid, payload })
 }
