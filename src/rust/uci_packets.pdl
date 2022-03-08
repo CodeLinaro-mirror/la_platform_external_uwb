@@ -11,7 +11,12 @@ enum GroupId : 4 {
     RANGING_SESSION_CONTROL = 0x02,
     DATA_CONTROL = 0x03,
     TEST = 0x0d,
-    ANDROID = 0x0e,
+    VENDOR_RESERVED_9 = 0x09,
+    VENDOR_RESERVED_A = 0x0a,
+    VENDOR_RESERVED_B = 0x0b,
+    VENDOR_RESERVED_C = 0x0c,
+    VENDOR_ANDROID = 0x0e,
+    VENDOR_RESERVED_F = 0x0f,
 }
 
 enum CoreOpCode : 6 {
@@ -99,7 +104,7 @@ enum DeviceConfigId : 8 {
     LOW_POWER_MODE = 0x01,
 }
 
-enum AppConfigId : 8 {
+enum AppConfigTlvType : 8 {
     DEVICE_TYPE = 0x00,
     RANGING_ROUND_USAGE = 0x01,
     STS_CONFIG = 0x02,
@@ -148,6 +153,8 @@ enum AppConfigId : 8 {
     STS_LENGTH = 0x35,
 
     // CCC specific
+    CCC_HOP_MODE_KEY = 0xA0,
+    CCC_UWB_TIME0 = 0xA1,
     CCC_RANGING_PROTOCOL_VER = 0xA3,
     CCC_UWB_CONFIG_ID = 0xA4,
     CCC_PULSESHAPE_COMBO = 0xA5,
@@ -158,6 +165,40 @@ enum AppConfigId : 8 {
     NB_OF_AZIMUTH_MEASUREMENTS = 0xE4,
     NB_OF_ELEVATION_MEASUREMENTS = 0xE5,
 }
+
+enum CapTlvType : 8 {
+    SUPPORTED_FIRA_PHY_VERSION_RANGE = 0x0,
+    SUPPORTED_FIRA_MAC_VERSION_RANGE = 0x1,
+    SUPPORTED_DEVICE_ROLES = 0x2,
+    SUPPORTED_RANGING_METHOD = 0x3,
+    SUPPORTED_STS_CONFIG = 0x4,
+    SUPPORTED_MULTI_NODE_MODES = 0x5,
+    SUPPORTED_RANGING_TIME_STRUCT = 0x6,
+    SUPPORTED_SCHEDULED_MODE = 0x7,
+    SUPPORTED_HOPPING_MODE = 0x8,
+    SUPPORTED_BLOCK_STRIDING = 0x9,
+    SUPPORTED_UWB_INITIATION_TIME = 0x0A,
+    SUPPORTED_CHANNELS = 0x0B,
+    SUPPORTED_RFRAME_CONFIG = 0x0C,
+    SUPPORTED_CC_CONSTRAINT_LENGTH = 0x0D,
+    SUPPORTED_BPRF_PARAMETER_SETS = 0x0E,
+    SUPPORTED_HPRF_PARAMETER_SETS = 0x0F,
+    SUPPORTED_AOA = 0x10,
+    SUPPORTED_EXTENDED_MAC_ADDRESS = 0x11,
+    SUPPORTED_AOA_RESULT_REQ_ANTENNA_INTERLEAVING = 0xE3,
+
+    // CCC specific
+    CCC_SUPPORTED_VERSIONS = 0xA0,
+    CCC_SUPPORTED_UWB_CONFIGS = 0xA1,
+    CCC_SUPPORTED_PULSE_SHAPE_COMBOS = 0xA2,
+    CCC_SUPPORTED_RAN_MULTIPLIER = 0xA3,
+    CCC_SUPPORTED_CHAPS_PER_SLOT = 0xA4,
+    CCC_SUPPORTED_SYNC_CODES = 0xA5,
+    CCC_SUPPORTED_CHANNELS = 0xA6,
+    CCC_SUPPORTED_HOPPING_SEQUENCES = 0xA7,
+    CCC_SUPPORTED_HOPPING_CONFIG_MODES = 0xA8,
+}
+
 
 // AOA result request type.
 // Values set for AOA_RESULT_REQ config ID.
@@ -222,117 +263,116 @@ packet UciPacket {
     group_id: GroupId,
     packet_boundary_flag: PacketBoundaryFlag,
     message_type: MessageType,
-    _payload_,
-}
-
-packet UciCommand : UciPacket (message_type = COMMAND) {
-    _payload_,
-}
-
-packet UciResponse : UciPacket (message_type = RESPONSE) {
-    _payload_,
-}
-
-packet UciNotification : UciPacket (message_type = NOTIFICATION) {
-    _payload_,
+    _body_,
 }
 
 // TODO(b/202760099): Handle fragmentation of packets if the size exceed max allowed.
+packet UciCommand : UciPacket (message_type = COMMAND, packet_boundary_flag = COMPLETE) {
+    _body_,
+}
 
-packet CoreCommand : UciCommand (packet_boundary_flag = COMPLETE, group_id = CORE) {
+packet UciResponse : UciPacket (message_type = RESPONSE, packet_boundary_flag = COMPLETE) {
+    _body_,
+}
+
+packet UciNotification : UciPacket (message_type = NOTIFICATION, packet_boundary_flag = COMPLETE) {
+    _body_,
+}
+
+packet CoreCommand : UciCommand (group_id = CORE) {
     core_opcode: CoreOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet CoreResponse : UciResponse (packet_boundary_flag = COMPLETE, group_id = CORE) {
+packet CoreResponse : UciResponse (group_id = CORE) {
     core_opcode: CoreOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet CoreNotification : UciNotification (packet_boundary_flag = COMPLETE, group_id = CORE) {
+packet CoreNotification : UciNotification (group_id = CORE) {
     core_opcode: CoreOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet SessionCommand : UciCommand (packet_boundary_flag = COMPLETE, group_id = SESSION_CONFIG) {
+packet SessionCommand : UciCommand (group_id = SESSION_CONFIG) {
     session_opcode: SessionOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet SessionResponse : UciResponse (packet_boundary_flag = COMPLETE, group_id = SESSION_CONFIG) {
+packet SessionResponse : UciResponse (group_id = SESSION_CONFIG) {
     session_opcode: SessionOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet SessionNotification : UciNotification (packet_boundary_flag = COMPLETE, group_id = SESSION_CONFIG) {
+packet SessionNotification : UciNotification (group_id = SESSION_CONFIG) {
     session_opcode: SessionOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet RangingCommand : UciCommand (packet_boundary_flag = COMPLETE, group_id = RANGING_SESSION_CONTROL) {
+packet RangingCommand : UciCommand (group_id = RANGING_SESSION_CONTROL) {
     ranging_opcode: RangeOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet RangingResponse : UciResponse (packet_boundary_flag = COMPLETE, group_id = RANGING_SESSION_CONTROL) {
+packet RangingResponse : UciResponse (group_id = RANGING_SESSION_CONTROL) {
     ranging_opcode: RangeOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet RangingNotification : UciNotification (packet_boundary_flag = COMPLETE, group_id = RANGING_SESSION_CONTROL) {
+packet RangingNotification : UciNotification (group_id = RANGING_SESSION_CONTROL) {
     ranging_opcode: RangeOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet AndroidCommand : UciCommand (packet_boundary_flag = COMPLETE, group_id = ANDROID) {
+packet AndroidCommand : UciCommand (group_id = VENDOR_ANDROID) {
     android_opcode: AndroidOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet AndroidResponse : UciResponse (packet_boundary_flag = COMPLETE, group_id = ANDROID) {
+packet AndroidResponse : UciResponse (group_id = VENDOR_ANDROID) {
     android_opcode: AndroidOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
-packet AndroidNotification : UciNotification (packet_boundary_flag = COMPLETE, group_id = ANDROID) {
+packet AndroidNotification : UciNotification (group_id = VENDOR_ANDROID) {
     android_opcode: AndroidOpCode,
     _reserved_: 2,
     _reserved_: 8,
-    _size_(_payload_): 8,
-    _payload_,
+    _size_(_body_): 8,
+    _body_,
 }
 
 packet GetDeviceInfoCmd : CoreCommand (core_opcode = CORE_DEVICE_INFO) {
@@ -363,8 +403,8 @@ test GetCapsInfoCmd {
     "\x20\x03\x00\x00",
 }
 
-struct TLV {
-    t: 8,
+struct CapTlv {
+    t: CapTlvType,
     _count_(v): 8,
     v: 8[],
 }
@@ -372,7 +412,7 @@ struct TLV {
 packet GetCapsInfoRsp : CoreResponse (core_opcode = CORE_GET_CAPS_INFO) {
     status: StatusCode,
     _count_(tlvs): 8,
-    tlvs: TLV[],
+    tlvs: CapTlv[],
 }
 
 test GetCapsInfoRsp {
@@ -504,7 +544,7 @@ test SessionStatusNtf {
 }
 
 struct AppConfigTlv {
-    cfg_id: AppConfigId,
+    cfg_id: AppConfigTlvType,
     _count_(v): 8,
     v: 8[],
 }
@@ -520,7 +560,7 @@ test SessionSetAppConfigCmd {
 }
 
 struct AppConfigStatus {
-    cfg_id: AppConfigId,
+    cfg_id: AppConfigTlvType,
     status: StatusCode,
 }
 
@@ -537,7 +577,7 @@ test SessionSetAppConfigRsp {
 packet SessionGetAppConfigCmd : SessionCommand (session_opcode = SESSION_GET_APP_CONFIG) {
     session_id: 32,
     _count_(app_cfg): 8,
-    app_cfg: 8[], // AppConfigId (Infra does not allow array of enums)
+    app_cfg: 8[], // AppConfigTlvType (Infra does not allow array of enums)
 }
 
 test SessionGetAppConfigCmd {
@@ -635,7 +675,7 @@ packet RangeDataNtf : RangingNotification (ranging_opcode = RANGE_START) {
     _reserved_: 8,
     mac_address_indicator: MacAddressIndicator,
     _reserved_: 64,
-    _payload_,
+    _body_,
 }
 
 packet ShortMacTwoWayRangeDataNtf : RangeDataNtf (ranging_measurement_type = TWO_WAY, mac_address_indicator = SHORT_ADDRESS) {
@@ -791,4 +831,125 @@ packet AndroidGetPowerStatsRsp : AndroidResponse (android_opcode = ANDROID_GET_P
 
 test AndroidGetPowerStatsRsp {
     "\x4e\x00\x00\x29\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+}
+
+// TODO: Figure out a way to avoid the repetition of the body below without breaking the packet inheritance.
+packet UciVendor_9_Command : UciCommand (group_id = VENDOR_RESERVED_9) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_A_Command : UciCommand (group_id = VENDOR_RESERVED_A) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_B_Command : UciCommand (group_id = VENDOR_RESERVED_B) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_C_Command : UciCommand (group_id = VENDOR_RESERVED_C) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_F_Command :  UciCommand (group_id = VENDOR_RESERVED_F) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_9_Response : UciResponse (group_id = VENDOR_RESERVED_9) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_A_Response : UciResponse (group_id = VENDOR_RESERVED_A) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_B_Response : UciResponse (group_id = VENDOR_RESERVED_B) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_C_Response : UciResponse (group_id = VENDOR_RESERVED_C) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_F_Response : UciResponse (group_id = VENDOR_RESERVED_F) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_9_Notification : UciNotification (group_id = VENDOR_RESERVED_9) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_A_Notification : UciNotification (group_id = VENDOR_RESERVED_A) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_B_Notification : UciNotification (group_id = VENDOR_RESERVED_B) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_C_Notification : UciNotification (group_id = VENDOR_RESERVED_C) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
+}
+
+packet UciVendor_F_Notification : UciNotification (group_id = VENDOR_RESERVED_F) {
+    opcode: 6,
+    _reserved_: 2,
+    _reserved_: 8,
+    _size_(_payload_): 8,
+    _payload_,
 }
