@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-use crate::uci::uci_hrcv::UciNotification;
-use jni::errors::{Error, Result};
-use jni::objects::{GlobalRef, JClass, JMethodID, JObject, JValue, JValue::Void};
+use jni::errors::Result;
+use jni::objects::{GlobalRef, JClass, JObject, JValue, JValue::Void};
 use jni::signature::JavaType;
 use jni::sys::jobjectArray;
 use jni::{AttachGuard, JNIEnv, JavaVM};
@@ -31,10 +30,10 @@ use uwb_uci_packets::{
     ShortAddressTwoWayRangingMeasurement, ShortMacTwoWayRangeDataNtfPacket,
 };
 
-const UWB_RANGING_DATA_CLASS: &str = "com/android/uwb/data/UwbRangingData";
-const UWB_TWO_WAY_MEASUREMENT_CLASS: &str = "com/android/uwb/data/UwbTwoWayMeasurement";
+const UWB_RANGING_DATA_CLASS: &str = "com/android/server/uwb/data/UwbRangingData";
+const UWB_TWO_WAY_MEASUREMENT_CLASS: &str = "com/android/server/uwb/data/UwbTwoWayMeasurement";
 const MULTICAST_LIST_UPDATE_STATUS_CLASS: &str =
-    "com/android/uwb/data/UwbMulticastListUpdateStatus";
+    "com/android/server/uwb/data/UwbMulticastListUpdateStatus";
 const SHORT_MAC_ADDRESS_LEN: usize = 2;
 const EXTENDED_MAC_ADDRESS_LEN: usize = 8;
 
@@ -48,30 +47,34 @@ const EXTENDED_MAC_ADDRESS_LEN: usize = 8;
 // TODO: We could consider caching the method ids rather than recomputing them each time at the cost
 // of less safety.
 
-pub trait Manager {
+pub trait EventManager {
     fn device_status_notification_received(&self, data: DeviceStatusNtfPacket) -> Result<()>;
     fn core_generic_error_notification_received(&self, data: GenericErrorPacket) -> Result<()>;
     fn session_status_notification_received(&self, data: SessionStatusNtfPacket) -> Result<()>;
-    fn short_range_data_notification(&self, data: ShortMacTwoWayRangeDataNtfPacket) -> Result<()>;
-    fn extended_range_data_notification(
+    fn short_range_data_notification_received(
+        &self,
+        data: ShortMacTwoWayRangeDataNtfPacket,
+    ) -> Result<()>;
+    fn extended_range_data_notification_received(
         &self,
         data: ExtendedMacTwoWayRangeDataNtfPacket,
     ) -> Result<()>;
-    fn session_update_controller_multicast_list_notification(
+    fn session_update_controller_multicast_list_notification_received(
         &self,
         data: SessionUpdateControllerMulticastListNtfPacket,
     ) -> Result<()>;
+    fn vendor_uci_notification_received(&self, gid: u32, oid: u32, payload: Vec<u8>) -> Result<()>;
 }
 
 // Manages calling Java callbacks through the JNI.
-pub struct EventManager {
+pub struct EventManagerImpl {
     jvm: JavaVM,
     obj: GlobalRef,
     // cache used to lookup uwb classes in callback.
     class_loader_obj: GlobalRef,
 }
 
-impl Manager for EventManager {
+impl EventManager for EventManagerImpl {
     fn device_status_notification_received(&self, data: DeviceStatusNtfPacket) -> Result<()> {
         let env = self.jvm.attach_current_thread()?;
         let result = self.handle_device_status_notification_received(&env, data);
@@ -93,42 +96,52 @@ impl Manager for EventManager {
         result
     }
 
-    fn short_range_data_notification(&self, data: ShortMacTwoWayRangeDataNtfPacket) -> Result<()> {
+    fn short_range_data_notification_received(
+        &self,
+        data: ShortMacTwoWayRangeDataNtfPacket,
+    ) -> Result<()> {
         let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_short_range_data_notification(&env, data);
+        let result = self.handle_short_range_data_notification_received(&env, data);
         self.clear_exception(env);
         result
     }
 
-    fn extended_range_data_notification(
+    fn extended_range_data_notification_received(
         &self,
         data: ExtendedMacTwoWayRangeDataNtfPacket,
     ) -> Result<()> {
         let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_extended_range_data_notification(&env, data);
+        let result = self.handle_extended_range_data_notification_received(&env, data);
         self.clear_exception(env);
         result
     }
 
-    fn session_update_controller_multicast_list_notification(
+    fn session_update_controller_multicast_list_notification_received(
         &self,
         data: SessionUpdateControllerMulticastListNtfPacket,
     ) -> Result<()> {
         let env = self.jvm.attach_current_thread()?;
-        let result = self.handle_session_update_controller_multicast_list_notification(&env, data);
+        let result =
+            self.handle_session_update_controller_multicast_list_notification_received(&env, data);
+        self.clear_exception(env);
+        result
+    }
+    fn vendor_uci_notification_received(&self, gid: u32, oid: u32, payload: Vec<u8>) -> Result<()> {
+        let env = self.jvm.attach_current_thread()?;
+        let result = self.handle_vendor_uci_notification_received(&env, gid, oid, payload);
         self.clear_exception(env);
         result
     }
 }
 
-impl EventManager {
-    /// Creates a new EventManager.
+impl EventManagerImpl {
+    /// Creates a new EventManagerImpl.
     pub fn new(env: JNIEnv, obj: JObject) -> Result<Self> {
         let jvm = env.get_java_vm()?;
         let obj = env.new_global_ref(obj)?;
-        let class_loader_obj = EventManager::get_classloader_obj(&env)?;
+        let class_loader_obj = EventManagerImpl::get_classloader_obj(&env)?;
         let class_loader_obj = env.new_global_ref(class_loader_obj)?;
-        Ok(EventManager { jvm, obj, class_loader_obj })
+        Ok(EventManagerImpl { jvm, obj, class_loader_obj })
     }
 
     fn get_classloader_obj<'a>(env: &'a JNIEnv) -> Result<JObject<'a>> {
@@ -156,7 +169,7 @@ impl EventManager {
             "(Ljava/lang/String;)Ljava/lang/Class;",
             &[JValue::Object(JObject::from(env.new_string(class_name)?))],
         )?;
-        class_value.l().map(|value| JClass::from(value))
+        class_value.l().map(JClass::from)
     }
 
     fn handle_device_status_notification_received(
@@ -417,10 +430,10 @@ impl EventManager {
         two_way_measurements_java: jobjectArray,
         num_two_way_measurements: i32,
     ) -> Result<JObject<'a>> {
-        let ranging_data_class = self.find_class(env, &UWB_RANGING_DATA_CLASS)?;
+        let ranging_data_class = self.find_class(env, UWB_RANGING_DATA_CLASS)?;
         env.new_object(
             ranging_data_class,
-            "(JJIJIII[Lcom/android/uwb/data/UwbTwoWayMeasurement;)V",
+            "(JJIJIII[Lcom/android/server/uwb/data/UwbTwoWayMeasurement;)V",
             &[
                 JValue::Long(
                     data.get_sequence_number().to_i64().expect("Failed converting seq num to i64"),
@@ -454,68 +467,15 @@ impl EventManager {
         )
     }
 
-    fn handle_short_range_data_notification(
+    fn handle_short_range_data_notification_received(
         &self,
         env: &JNIEnv,
         data: ShortMacTwoWayRangeDataNtfPacket,
     ) -> Result<()> {
-        let two_way_measurement_class = self.find_class(&env, &UWB_TWO_WAY_MEASUREMENT_CLASS)?;
+        let two_way_measurement_class = self.find_class(env, UWB_TWO_WAY_MEASUREMENT_CLASS)?;
         let two_way_measurement_initial_java =
-            EventManager::create_zeroed_two_way_measurement_java(
-                &env,
-                two_way_measurement_class,
-                env.new_byte_array(
-                    EXTENDED_MAC_ADDRESS_LEN
-                        .to_i32()
-                        .expect("Failed converting mac address len to i32"),
-                )?,
-            )?;
-        let num_two_way_measurements: i32 = data
-            .get_two_way_ranging_measurements()
-            .len()
-            .to_i32()
-            .expect("Failed converting len to i32");
-        let two_way_measurements_java = env.new_object_array(
-            num_two_way_measurements,
-            two_way_measurement_class,
-            two_way_measurement_initial_java,
-        )?;
-        for (i, two_way_measurement) in data.get_two_way_ranging_measurements().iter().enumerate() {
-            let two_way_measurement_java = EventManager::create_short_mac_two_way_measurement_java(
-                &env,
-                two_way_measurement_class,
-                two_way_measurement,
-            )?;
-            env.set_object_array_element(
-                two_way_measurements_java,
-                i.to_i32().expect("Failed converting idx to i32"),
-                two_way_measurement_java,
-            )?
-        }
-        let ranging_data_java = self.create_range_data_java(
-            &env,
-            data.into(),
-            two_way_measurements_java,
-            num_two_way_measurements,
-        )?;
-        env.call_method(
-            self.obj.as_obj(),
-            "onRangeDataNotificationReceived",
-            "(Lcom/android/uwb/data/UwbRangingData;)V",
-            &[JValue::Object(JObject::from(ranging_data_java))],
-        )
-        .map(|_| ()) // drop void method return
-    }
-
-    fn handle_extended_range_data_notification(
-        &self,
-        env: &JNIEnv,
-        data: ExtendedMacTwoWayRangeDataNtfPacket,
-    ) -> Result<()> {
-        let two_way_measurement_class = self.find_class(&env, &UWB_TWO_WAY_MEASUREMENT_CLASS)?;
-        let two_way_measurement_initial_java =
-            EventManager::create_zeroed_two_way_measurement_java(
-                &env,
+            EventManagerImpl::create_zeroed_two_way_measurement_java(
+                env,
                 two_way_measurement_class,
                 env.new_byte_array(
                     EXTENDED_MAC_ADDRESS_LEN
@@ -535,8 +495,62 @@ impl EventManager {
         )?;
         for (i, two_way_measurement) in data.get_two_way_ranging_measurements().iter().enumerate() {
             let two_way_measurement_java =
-                EventManager::create_extended_mac_two_way_measurement_java(
-                    &env,
+                EventManagerImpl::create_short_mac_two_way_measurement_java(
+                    env,
+                    two_way_measurement_class,
+                    two_way_measurement,
+                )?;
+            env.set_object_array_element(
+                two_way_measurements_java,
+                i.to_i32().expect("Failed converting idx to i32"),
+                two_way_measurement_java,
+            )?
+        }
+        let ranging_data_java = self.create_range_data_java(
+            env,
+            data.into(),
+            two_way_measurements_java,
+            num_two_way_measurements,
+        )?;
+        env.call_method(
+            self.obj.as_obj(),
+            "onRangeDataNotificationReceived",
+            "(Lcom/android/server/uwb/data/UwbRangingData;)V",
+            &[JValue::Object(ranging_data_java)],
+        )
+        .map(|_| ()) // drop void method return
+    }
+
+    fn handle_extended_range_data_notification_received(
+        &self,
+        env: &JNIEnv,
+        data: ExtendedMacTwoWayRangeDataNtfPacket,
+    ) -> Result<()> {
+        let two_way_measurement_class = self.find_class(env, UWB_TWO_WAY_MEASUREMENT_CLASS)?;
+        let two_way_measurement_initial_java =
+            EventManagerImpl::create_zeroed_two_way_measurement_java(
+                env,
+                two_way_measurement_class,
+                env.new_byte_array(
+                    EXTENDED_MAC_ADDRESS_LEN
+                        .to_i32()
+                        .expect("Failed converting mac address len to i32"),
+                )?,
+            )?;
+        let num_two_way_measurements: i32 = data
+            .get_two_way_ranging_measurements()
+            .len()
+            .to_i32()
+            .expect("Failed converting len to i32");
+        let two_way_measurements_java = env.new_object_array(
+            num_two_way_measurements,
+            two_way_measurement_class,
+            two_way_measurement_initial_java,
+        )?;
+        for (i, two_way_measurement) in data.get_two_way_ranging_measurements().iter().enumerate() {
+            let two_way_measurement_java =
+                EventManagerImpl::create_extended_mac_two_way_measurement_java(
+                    env,
                     two_way_measurement_class,
                     two_way_measurement,
                 )?;
@@ -547,7 +561,7 @@ impl EventManager {
             )?;
         }
         let ranging_data_java = self.create_range_data_java(
-            &env,
+            env,
             data.into(),
             two_way_measurements_java,
             num_two_way_measurements,
@@ -555,20 +569,19 @@ impl EventManager {
         env.call_method(
             self.obj.as_obj(),
             "onRangeDataNotificationReceived",
-            "(Lcom/android/uwb/data/UwbRangingData;)V",
-            &[JValue::Object(JObject::from(ranging_data_java))],
+            "(Lcom/android/server/uwb/data/UwbRangingData;)V",
+            &[JValue::Object(ranging_data_java)],
         )
         .map(|_| ()) // drop void method return
     }
 
-    pub fn handle_session_update_controller_multicast_list_notification(
+    pub fn handle_session_update_controller_multicast_list_notification_received(
         &self,
         env: &JNIEnv,
         data: SessionUpdateControllerMulticastListNtfPacket,
     ) -> Result<()> {
-        let env = self.jvm.attach_current_thread()?;
         let uwb_multicast_update_class =
-            self.find_class(&env, &MULTICAST_LIST_UPDATE_STATUS_CLASS)?;
+            self.find_class(env, MULTICAST_LIST_UPDATE_STATUS_CLASS)?;
 
         let controlee_status = data.get_controlee_status();
         let count: i32 =
@@ -583,12 +596,12 @@ impl EventManager {
             status_list.push(iter.status.into());
         }
 
-        let mut mac_address_jintarray = env.new_int_array(count)?;
-        env.set_int_array_region(mac_address_jintarray, 0, mac_address_list.as_ref());
-        let mut subsession_id_jlongarray = env.new_long_array(count)?;
-        env.set_long_array_region(subsession_id_jlongarray, 0, subsession_id_list.as_ref());
-        let mut status_jintarray = env.new_int_array(count)?;
-        env.set_int_array_region(status_jintarray, 0, status_list.as_ref());
+        let mac_address_jintarray = env.new_int_array(count)?;
+        env.set_int_array_region(mac_address_jintarray, 0, mac_address_list.as_ref())?;
+        let subsession_id_jlongarray = env.new_long_array(count)?;
+        env.set_long_array_region(subsession_id_jlongarray, 0, subsession_id_list.as_ref())?;
+        let status_jintarray = env.new_int_array(count)?;
+        env.set_int_array_region(status_jintarray, 0, status_list.as_ref())?;
 
         let uwb_multicast_update_object = env.new_object(
             uwb_multicast_update_class,
@@ -602,7 +615,7 @@ impl EventManager {
                         .try_into()
                         .expect("Could not convert remaining multicast list size"),
                 ),
-                JValue::Int(count.try_into().expect("Could not convert count")),
+                JValue::Int(count),
                 JValue::Object(JObject::from(mac_address_jintarray)),
                 JValue::Object(JObject::from(subsession_id_jlongarray)),
                 JValue::Object(JObject::from(status_jintarray)),
@@ -612,8 +625,32 @@ impl EventManager {
         env.call_method(
             self.obj.as_obj(),
             "onMulticastListUpdateNotificationReceived",
-            "(Lcom/android/uwb/data/UwbMulticastListUpdateStatus;)V",
-            &[JValue::Object(JObject::from(uwb_multicast_update_object))],
+            "(Lcom/android/server/uwb/data/UwbMulticastListUpdateStatus;)V",
+            &[JValue::Object(uwb_multicast_update_object)],
+        )
+        .map(|_| ()) // drop void method return
+    }
+
+    pub fn handle_vendor_uci_notification_received(
+        &self,
+        env: &JNIEnv,
+        gid: u32,
+        oid: u32,
+        payload: Vec<u8>,
+    ) -> Result<()> {
+        let gid: i32 = gid.try_into().expect("Failed to convert gid");
+        let oid: i32 = oid.try_into().expect("Failed to convert gid");
+        let payload_jbytearray = env.byte_array_from_slice(payload.as_ref())?;
+
+        env.call_method(
+            self.obj.as_obj(),
+            "onVendorUciNotificationReceived",
+            "(IIB])V",
+            &[
+                JValue::Int(gid),
+                JValue::Int(oid),
+                JValue::Object(JObject::from(payload_jbytearray)),
+            ],
         )
         .map(|_| ()) // drop void method return
     }
@@ -634,38 +671,50 @@ impl EventManager {
 }
 
 #[cfg(test)]
-pub struct EventManagerTest {}
+#[derive(Default)]
+pub struct MockEventManager {}
 
 #[cfg(test)]
-impl EventManagerTest {
+impl MockEventManager {
     pub fn new() -> Self {
-        Self {}
+        Default::default()
     }
 }
 
 #[cfg(test)]
-impl Manager for EventManagerTest {
-    fn device_status_notification_received(&self, data: DeviceStatusNtfPacket) -> Result<()> {
+impl EventManager for MockEventManager {
+    fn device_status_notification_received(&self, _data: DeviceStatusNtfPacket) -> Result<()> {
         Ok(())
     }
-    fn core_generic_error_notification_received(&self, data: GenericErrorPacket) -> Result<()> {
+    fn core_generic_error_notification_received(&self, _data: GenericErrorPacket) -> Result<()> {
         Ok(())
     }
-    fn session_status_notification_received(&self, data: SessionStatusNtfPacket) -> Result<()> {
+    fn session_status_notification_received(&self, _data: SessionStatusNtfPacket) -> Result<()> {
         Ok(())
     }
-    fn short_range_data_notification(&self, data: ShortMacTwoWayRangeDataNtfPacket) -> Result<()> {
-        Ok(())
-    }
-    fn extended_range_data_notification(
+    fn short_range_data_notification_received(
         &self,
-        data: ExtendedMacTwoWayRangeDataNtfPacket,
+        _data: ShortMacTwoWayRangeDataNtfPacket,
     ) -> Result<()> {
         Ok(())
     }
-    fn session_update_controller_multicast_list_notification(
+    fn extended_range_data_notification_received(
         &self,
-        data: SessionUpdateControllerMulticastListNtfPacket,
+        _data: ExtendedMacTwoWayRangeDataNtfPacket,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn session_update_controller_multicast_list_notification_received(
+        &self,
+        _data: SessionUpdateControllerMulticastListNtfPacket,
+    ) -> Result<()> {
+        Ok(())
+    }
+    fn vendor_uci_notification_received(
+        &self,
+        _gid: u32,
+        _oid: u32,
+        _payload: Vec<u8>,
     ) -> Result<()> {
         Ok(())
     }
