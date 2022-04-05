@@ -2,66 +2,6 @@ package {
     default_applicable_licenses: ["external_uwb_license"],
 }
 
-cc_library_static {
-    arch: {
-        arm: {
-            instruction_set: "arm",
-        },
-    },
-    name: "libuwb-uci",
-    min_sdk_version: "Tiramisu",
-    static_libs: [
-        "android.system.suspend-V1-ndk",
-        "android.hardware.uwb-V1-ndk",
-        "libbase",
-        "libcutils",
-        "libpower",
-        "libutils",
-    ],
-    shared_libs: [
-        "libbinder_ndk",
-        "liblog",
-    ],
-
-    cflags: [
-        "-DBUILDCFG=1",
-        "-Werror",
-        "-Wall",
-        "-Wextra",
-        "-DNXP_UWB_EXTNS=TRUE",
-        "-DNXP_UWB_DEBUG_LOG=TRUE",
-    ],
-    local_include_dirs: [
-        "include",
-        "log",
-        "gki/ulinux",
-        "gki/common",
-        "uci/include",
-        "uwa/include",
-        "uwb/include",
-        "rust/adaptation"
-    ],
-    srcs: [
-        "uwa/dm/*.cc",
-        "uwa/sys/*.cc",
-        "uwb/uci/*.cc",
-        "uwb/uwb/*.cc",
-        "adaptation/*.cc",
-        "gki/common/*.cc",
-        "gki/ulinux/*.cc",
-    ],
-    product_variables: {
-        debuggable: {
-            cflags: [
-                "-DDCHECK_ALWAYS_ON",
-            ],
-        },
-    },
-    apex_available: [
-        "com.android.uwb",
-    ],
-}
-
 rust_defaults {
     name: "libuwb_uci_defaults",
     srcs: [
@@ -81,6 +21,7 @@ rust_defaults {
         "liblog_rust",
         "liblogger",
         "libnum_traits",
+        "librustutils",
         "libthiserror",
         "libtokio",
         "libuwb_uci_packets",
@@ -88,11 +29,6 @@ rust_defaults {
     ],
     proc_macros: [
         "libasync_trait",
-    ],
-    shared_libs: [
-        "libbase",
-        "libbinder_ndk",
-        "libcutils",
     ],
     apex_available: [
         "com.android.uwb",
@@ -108,7 +44,23 @@ rust_library {
 rust_test {
     name: "libuwb_uci_rust_tests",
     defaults: ["libuwb_uci_defaults"],
-    test_suites: ["general-tests"],
+    test_suites: [
+        "general-tests",
+        "mts-uwb"
+    ],
+    test_config_template: "uwb_rust_test_config_template.xml",
+    // Support multilib variants (using different suffix per sub-architecture), which is needed on
+    // build targets with secondary architectures, as the MTS test suite packaging logic flattens
+    // all test artifacts into a single `testcases` directory.
+    compile_multilib: "both",
+    multilib: {
+        lib32: {
+            suffix: "32",
+        },
+        lib64: {
+            suffix: "",
+        },
+    },
     auto_gen_config: true,
 }
 
@@ -117,7 +69,23 @@ rust_test {
     srcs: [
         ":UwbGeneratedPackets_rust",
     ],
-    test_suites: ["general-tests"],
+    test_suites: [
+        "general-tests",
+        "mts-uwb"
+    ],
+    test_config_template: "uwb_rust_test_config_template.xml",
+    // Support multilib variants (using different suffix per sub-architecture), which is needed on
+    // build targets with secondary architectures, as the MTS test suite packaging logic flattens
+    // all test artifacts into a single `testcases` directory.
+    compile_multilib: "both",
+    multilib: {
+        lib32: {
+            suffix: "32",
+        },
+        lib64: {
+            suffix: "",
+        },
+    },
     auto_gen_config: true,
     proc_macros: ["libnum_derive"],
     rustlibs:[
