@@ -449,6 +449,7 @@ pub(crate) mod test_utils {
                 },
             ]),
             rcr_indicator: 0,
+            raw_ranging_data: vec![0x12, 0x34],
         }
     }
 
@@ -672,7 +673,7 @@ mod tests {
         ]);
         let received_tlvs = received_config_map
             .iter()
-            .map(|(key, value)| AppConfigTlv { cfg_id: *key, v: value.clone() })
+            .map(|(key, value)| AppConfigTlv::new(*key, value.clone()))
             .collect();
         let started_params =
             CccStartedAppConfigParams::from_config_map(received_config_map).unwrap();
