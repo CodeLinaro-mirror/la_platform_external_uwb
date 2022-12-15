@@ -19,5 +19,7 @@ pub(crate) mod utils;
 
 pub mod error;
 pub mod params;
+#[cfg(feature = "proto")]
+pub mod proto;
 pub mod service;
 pub mod uci;
