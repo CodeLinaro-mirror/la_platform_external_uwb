@@ -24,9 +24,9 @@ use crate::uci::command::UciCommand;
 //use crate::uci::error::{Error, Result};
 use crate::error::{Error, Result};
 use crate::params::uci_packets::{
-    AppConfigTlv, AppConfigTlvType, CapTlv, Controlee, ControleesV2, CoreSetConfigResponse,
-    CountryCode, DeviceConfigId, DeviceConfigTlv, DeviceState, GetDeviceInfoResponse, GroupId,
-    MessageType, PowerStats, RawUciMessage, ResetConfig, SessionId, SessionState, SessionType,
+    AppConfigTlv, AppConfigTlvType, CapTlv, Controlees, CoreSetConfigResponse, CountryCode,
+    DeviceConfigId, DeviceConfigTlv, DeviceState, GetDeviceInfoResponse, GroupId, MessageType,
+    PowerStats, RawUciMessage, ResetConfig, SessionId, SessionState, SessionType,
     SessionUpdateActiveRoundsDtTagResponse, SetAppConfigResponse, UciControlPacketPacket,
     UciDataPacketPacket, UpdateMulticastListAction,
 };
@@ -39,6 +39,7 @@ use crate::uci::timeout_uci_hal::TimeoutUciHal;
 use crate::uci::uci_hal::{UciHal, UciHalPacket};
 use crate::uci::uci_logger::{UciLogger, UciLoggerMode, UciLoggerWrapper};
 use crate::utils::{clean_mpsc_receiver, PinSleep};
+use uwb_uci_packets::UciDefragPacket;
 
 const UCI_TIMEOUT_MS: u64 = 800;
 const MAX_RETRY_COUNT: usize = 3;
@@ -46,7 +47,7 @@ const MAX_RETRY_COUNT: usize = 3;
 /// The UciManager organizes the state machine of the UWB HAL, and provides the interface which
 /// abstracts the UCI commands, responses, and notifications.
 #[async_trait]
-pub(crate) trait UciManager: 'static + Send + Sync + Clone {
+pub trait UciManager: 'static + Send + Sync + Clone {
     async fn set_logger_mode(&self, logger_mode: UciLoggerMode) -> Result<()>;
     // Set the sendor of the UCI notificaions.
     async fn set_core_notification_sender(
@@ -103,13 +104,7 @@ pub(crate) trait UciManager: 'static + Send + Sync + Clone {
         &self,
         session_id: SessionId,
         action: UpdateMulticastListAction,
-        controlees: Vec<Controlee>,
-    ) -> Result<()>;
-    async fn session_update_controller_multicast_list_v2(
-        &self,
-        session_id: SessionId,
-        action: UpdateMulticastListAction,
-        controlees: ControleesV2,
+        controlees: Controlees,
     ) -> Result<()>;
     // Update active ranging rounds update for DT
     async fn session_update_active_rounds_dt_tag(
@@ -127,18 +122,29 @@ pub(crate) trait UciManager: 'static + Send + Sync + Clone {
     async fn android_get_power_stats(&self) -> Result<PowerStats>;
 
     // Send a raw uci command.
-    async fn raw_uci_cmd(&self, gid: u32, oid: u32, payload: Vec<u8>) -> Result<RawUciMessage>;
+    async fn raw_uci_cmd(
+        &self,
+        mt: u32,
+        gid: u32,
+        oid: u32,
+        payload: Vec<u8>,
+    ) -> Result<RawUciMessage>;
 }
 
 /// UciManagerImpl is the main implementation of UciManager. Using the actor model, UciManagerImpl
 /// delegates the requests to UciManagerActor.
 #[derive(Clone)]
-pub(crate) struct UciManagerImpl {
+pub struct UciManagerImpl {
     cmd_sender: mpsc::UnboundedSender<(UciManagerCmd, oneshot::Sender<Result<UciResponse>>)>,
 }
 
 impl UciManagerImpl {
-    pub fn new<T: UciHal, U: UciLogger>(hal: T, logger: U, logger_mode: UciLoggerMode) -> Self {
+    /// Constructor. Need to be called in an async context.
+    pub(crate) fn new<T: UciHal, U: UciLogger>(
+        hal: T,
+        logger: U,
+        logger_mode: UciLoggerMode,
+    ) -> Self {
         let (cmd_sender, cmd_receiver) = mpsc::unbounded_channel();
         let mut actor = UciManagerActor::new(hal, logger, logger_mode, cmd_receiver);
         tokio::spawn(async move { actor.run().await });
@@ -336,38 +342,19 @@ impl UciManager for UciManagerImpl {
         &self,
         session_id: SessionId,
         action: UpdateMulticastListAction,
-        controlees: Vec<Controlee>,
-    ) -> Result<()> {
-        if !(1..=8).contains(&controlees.len()) {
-            warn!("Number of controlees should be between 1 to 8");
-            return Err(Error::BadParameters);
-        }
-        let cmd =
-            UciCommand::SessionUpdateControllerMulticastList { session_id, action, controlees };
-        match self.send_cmd(UciManagerCmd::SendUciCommand { cmd }).await {
-            Ok(UciResponse::SessionUpdateControllerMulticastList(resp)) => resp,
-            Ok(_) => Err(Error::Unknown),
-            Err(e) => Err(e),
-        }
-    }
-
-    async fn session_update_controller_multicast_list_v2(
-        &self,
-        session_id: SessionId,
-        action: UpdateMulticastListAction,
-        controlees: ControleesV2,
+        controlees: Controlees,
     ) -> Result<()> {
         let controlees_len = match controlees {
-            ControleesV2::NoSessionKey(ref controlee_vec) => controlee_vec.len(),
-            ControleesV2::ShortSessionKey(ref controlee_vec) => controlee_vec.len(),
-            ControleesV2::LongSessionKey(ref controlee_vec) => controlee_vec.len(),
+            Controlees::NoSessionKey(ref controlee_vec) => controlee_vec.len(),
+            Controlees::ShortSessionKey(ref controlee_vec) => controlee_vec.len(),
+            Controlees::LongSessionKey(ref controlee_vec) => controlee_vec.len(),
         };
         if !(1..=8).contains(&controlees_len) {
             warn!("Number of controlees should be between 1 to 8");
             return Err(Error::BadParameters);
         }
         let cmd =
-            UciCommand::SessionUpdateControllerMulticastListV2 { session_id, action, controlees };
+            UciCommand::SessionUpdateControllerMulticastList { session_id, action, controlees };
         match self.send_cmd(UciManagerCmd::SendUciCommand { cmd }).await {
             Ok(UciResponse::SessionUpdateControllerMulticastList(resp)) => resp,
             Ok(_) => Err(Error::Unknown),
@@ -433,8 +420,14 @@ impl UciManager for UciManagerImpl {
         }
     }
 
-    async fn raw_uci_cmd(&self, gid: u32, oid: u32, payload: Vec<u8>) -> Result<RawUciMessage> {
-        let cmd = UciCommand::RawUciCmd { gid, oid, payload };
+    async fn raw_uci_cmd(
+        &self,
+        mt: u32,
+        gid: u32,
+        oid: u32,
+        payload: Vec<u8>,
+    ) -> Result<RawUciMessage> {
+        let cmd = UciCommand::RawUciCmd { mt, gid, oid, payload };
         match self.send_cmd(UciManagerCmd::SendUciCommand { cmd }).await {
             Ok(UciResponse::RawUciCmd(resp)) => resp,
             Ok(_) => Err(Error::Unknown),
@@ -540,49 +533,10 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
                     }
                 }
 
-                // Handle the UCI response or notification from HAL. Only when HAL is opened.
+                // Handle the UCI response, notification or data packet from HAL. Only when HAL
+                // is opened.
                 packet = self.packet_receiver.recv(), if self.is_hal_opened => {
-                    match packet {
-                        None => {
-                            warn!("UciHal dropped the packet_sender unexpectedly.");
-                            self.on_hal_closed();
-                        },
-                        Some(rx_packet) => {
-                            // TODO(b/261762781): Check message type and call different defragment
-                            // fn for the Rx data packets. Inside it, call handle_data_rcv().
-                            if let Some(packet) =
-                                self.defrager.defragment_packet(&rx_packet) {
-                                self.logger.log_uci_response_or_notification(&packet);
-
-                                // Handle response to raw UCI cmd. We want to send it back as
-                                // raw UCI message instead of standard response message.
-                                if let Some(raw_cmd) = &self.last_raw_cmd {
-                                    if packet.get_message_type() == MessageType::Response {
-                                        let resp = if raw_cmd.is_same_signature(&packet) {
-                                            UciResponse::RawUciCmd(Ok(RawUciMessage::from(packet)))
-                                        } else {
-                                            UciResponse::RawUciCmd(Err(Error::Unknown))
-                                        };
-                                        self.handle_response(resp).await;
-                                        self.last_raw_cmd = None;
-                                        continue;
-                                    }
-                                }
-
-                                match packet.try_into() {
-                                    Ok(UciMessage::Response(resp)) => {
-                                        self.handle_response(resp).await;
-                                    }
-                                    Ok(UciMessage::Notification(notf)) => {
-                                        self.handle_notification(notf).await;
-                                    }
-                                    Err(e)=> {
-                                        error!("Failed to parse received message: {:?}", e);
-                                    }
-                                }
-                            }
-                        },
-                    }
+                    self.handle_hal_packet(packet).await;
                 }
 
                 // Timeout waiting for the response of the UCI command.
@@ -686,7 +640,7 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
 
                 // Remember that this command is a raw UCI command, we'll use this later
                 // to send a raw UCI response.
-                if let UciCommand::RawUciCmd { gid, oid, payload: _ } = cmd.clone() {
+                if let UciCommand::RawUciCmd { mt: _, gid, oid, payload: _ } = cmd.clone() {
                     let gid = GroupId::from_u32(gid);
                     let oid = oid.to_u8();
                     if oid.is_none() || gid.is_none() {
@@ -732,6 +686,57 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
             self.logger.log_uci_command(&cmd);
         }
         result
+    }
+
+    async fn handle_hal_packet(&mut self, packet: Option<UciHalPacket>) {
+        let defrag_packet = match packet {
+            Some(rx_packet) => self.defrager.defragment_packet(&rx_packet),
+            None => {
+                warn!("UciHal dropped the packet_sender unexpectedly.");
+                self.on_hal_closed();
+                return;
+            }
+        };
+        let defrag_packet = match defrag_packet {
+            Some(p) => p,
+            None => return,
+        };
+
+        match defrag_packet {
+            UciDefragPacket::Control(packet) => {
+                self.logger.log_uci_response_or_notification(&packet);
+                // Handle response to raw UCI cmd. We want to send it back as
+                // raw UCI message instead of standard response message.
+                if let Some(raw_cmd) = &self.last_raw_cmd {
+                    if packet.get_message_type() == MessageType::Response {
+                        let resp = if raw_cmd.is_same_signature(&packet) {
+                            UciResponse::RawUciCmd(Ok(RawUciMessage::from(packet)))
+                        } else {
+                            UciResponse::RawUciCmd(Err(Error::Unknown))
+                        };
+                        self.handle_response(resp).await;
+                        self.last_raw_cmd = None;
+                        return;
+                    }
+                }
+
+                match packet.try_into() {
+                    Ok(UciMessage::Response(resp)) => {
+                        self.handle_response(resp).await;
+                    }
+                    Ok(UciMessage::Notification(notf)) => {
+                        self.handle_notification(notf).await;
+                    }
+                    Err(e) => {
+                        error!("Failed to parse received message: {:?}", e);
+                    }
+                }
+            }
+            UciDefragPacket::Data(packet) => {
+                self.logger.log_uci_data(&packet);
+                self.handle_data_rcv(packet);
+            }
+        }
     }
 
     async fn handle_response(&mut self, resp: UciResponse) {
@@ -787,8 +792,6 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
         }
     }
 
-    // TODO(b/261762781): Call when Defragmenter receives a complete DATA_RCV packet.
-    #[allow(dead_code)]
     fn handle_data_rcv(&mut self, packet: UciDataPacketPacket) {
         match packet.try_into() {
             Ok(data_rcv) => {
@@ -877,12 +880,11 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use uwb_uci_packets::{
-        Controlee_V2_0_0_Byte_Version, MessageControl, SessionGetCountCmdBuilder,
-        SessionGetCountRspBuilder,
-    };
+    use uwb_uci_packets::{SessionGetCountCmdBuilder, SessionGetCountRspBuilder};
 
-    use crate::params::uci_packets::{AppConfigStatus, AppConfigTlvType, CapTlvType, StatusCode};
+    use crate::params::uci_packets::{
+        AppConfigStatus, AppConfigTlvType, CapTlvType, Controlee, StatusCode,
+    };
     use crate::uci::mock_uci_hal::MockUciHal;
     use crate::uci::mock_uci_logger::{MockUciLogger, UciLogEvent};
     use crate::uci::uci_logger::NopUciLogger;
@@ -1318,7 +1320,7 @@ mod tests {
                 let cmd = UciCommand::SessionUpdateControllerMulticastList {
                     session_id,
                     action,
-                    controlees: vec![controlee_clone],
+                    controlees: Controlees::NoSessionKey(vec![controlee_clone]),
                 };
                 let resp = into_uci_hal_packets(
                     uwb_uci_packets::SessionUpdateControllerMulticastListRspBuilder {
@@ -1334,48 +1336,10 @@ mod tests {
         .await;
 
         let result = uci_manager
-            .session_update_controller_multicast_list(session_id, action, vec![controlee])
-            .await;
-        assert!(result.is_ok());
-        assert!(mock_hal.wait_expected_calls_done().await);
-    }
-
-    #[tokio::test]
-    async fn test_session_update_controller_multicast_list_v2_ok() {
-        let session_id = 0x123;
-        let action = UpdateMulticastListAction::AddControlee;
-        let controlee = Controlee_V2_0_0_Byte_Version {
-            short_address: 0x4567,
-            subsession_id: 0x90ab,
-            message_control: MessageControl::SubSessionKeyNotConfigured,
-        };
-        let controlee_clone = controlee.clone();
-
-        let (uci_manager, mut mock_hal) = setup_uci_manager_with_open_hal(
-            move |hal| {
-                let cmd = UciCommand::SessionUpdateControllerMulticastListV2 {
-                    session_id,
-                    action,
-                    controlees: ControleesV2::NoSessionKey(vec![controlee_clone]),
-                };
-                let resp = into_uci_hal_packets(
-                    uwb_uci_packets::SessionUpdateControllerMulticastListRspBuilder {
-                        status: uwb_uci_packets::StatusCode::UciStatusOk,
-                    },
-                );
-
-                hal.expected_send_command(cmd, resp, Ok(()));
-            },
-            UciLoggerMode::Disabled,
-            mpsc::unbounded_channel::<UciLogEvent>().0,
-        )
-        .await;
-
-        let result = uci_manager
-            .session_update_controller_multicast_list_v2(
+            .session_update_controller_multicast_list(
                 session_id,
                 action,
-                ControleesV2::NoSessionKey(vec![controlee]),
+                uwb_uci_packets::Controlees::NoSessionKey(vec![controlee]),
             )
             .await;
         assert!(result.is_ok());
@@ -1542,6 +1506,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_raw_uci_cmd_vendor_gid_ok() {
+        let mt = 0x1;
         let gid = 0xF; // Vendor reserved GID.
         let oid = 0x3;
         let cmd_payload = vec![0x11, 0x22, 0x33, 0x44];
@@ -1551,7 +1516,7 @@ mod tests {
 
         let (uci_manager, mut mock_hal) = setup_uci_manager_with_open_hal(
             move |hal| {
-                let cmd = UciCommand::RawUciCmd { gid, oid, payload: cmd_payload_clone };
+                let cmd = UciCommand::RawUciCmd { mt, gid, oid, payload: cmd_payload_clone };
                 let resp = into_uci_hal_packets(uwb_uci_packets::UciVendor_F_ResponseBuilder {
                     opcode: oid as u8,
                     payload: Some(Bytes::from(resp_payload_clone)),
@@ -1565,13 +1530,14 @@ mod tests {
         .await;
 
         let expected_result = RawUciMessage { gid, oid, payload: resp_payload };
-        let result = uci_manager.raw_uci_cmd(gid, oid, cmd_payload).await.unwrap();
+        let result = uci_manager.raw_uci_cmd(mt, gid, oid, cmd_payload).await.unwrap();
         assert_eq!(result, expected_result);
         assert!(mock_hal.wait_expected_calls_done().await);
     }
 
     #[tokio::test]
     async fn test_raw_uci_cmd_fira_gid_ok() {
+        let mt = 0x1;
         let gid = 0x1; // SESSION_CONFIG GID.
         let oid = 0x3;
         let cmd_payload = vec![0x11, 0x22, 0x33, 0x44];
@@ -1584,7 +1550,7 @@ mod tests {
 
         let (uci_manager, mut mock_hal) = setup_uci_manager_with_open_hal(
             move |hal| {
-                let cmd = UciCommand::RawUciCmd { gid, oid, payload: cmd_payload_clone };
+                let cmd = UciCommand::RawUciCmd { mt, gid, oid, payload: cmd_payload_clone };
                 let resp = into_uci_hal_packets(uwb_uci_packets::SessionSetAppConfigRspBuilder {
                     status,
                     cfg_status,
@@ -1598,7 +1564,41 @@ mod tests {
         .await;
 
         let expected_result = RawUciMessage { gid, oid, payload: resp_payload };
-        let result = uci_manager.raw_uci_cmd(gid, oid, cmd_payload).await.unwrap();
+        let result = uci_manager.raw_uci_cmd(mt, gid, oid, cmd_payload).await.unwrap();
+        assert_eq!(result, expected_result);
+        assert!(mock_hal.wait_expected_calls_done().await);
+    }
+
+    #[tokio::test]
+    async fn test_raw_uci_cmd_mt_testing_ok() {
+        let mt = 0x4;
+        let gid = 0x1; // SESSION_CONFIG GID.
+        let oid = 0x3;
+        let cmd_payload = vec![0x11, 0x22, 0x33, 0x44];
+        let cmd_payload_clone = cmd_payload.clone();
+        let resp_payload = vec![0x00, 0x01, 0x07, 0x00];
+        let status = StatusCode::UciStatusOk;
+        let cfg_id = AppConfigTlvType::DstMacAddress;
+        let app_config = AppConfigStatus { cfg_id, status };
+        let cfg_status = vec![app_config];
+
+        let (uci_manager, mut mock_hal) = setup_uci_manager_with_open_hal(
+            move |hal| {
+                let cmd = UciCommand::RawUciCmd { mt, gid, oid, payload: cmd_payload_clone };
+                let resp = into_uci_hal_packets(uwb_uci_packets::SessionSetAppConfigRspBuilder {
+                    status,
+                    cfg_status,
+                });
+
+                hal.expected_send_command(cmd, resp, Ok(()));
+            },
+            UciLoggerMode::Disabled,
+            mpsc::unbounded_channel::<UciLogEvent>().0,
+        )
+        .await;
+
+        let expected_result = RawUciMessage { gid, oid, payload: resp_payload };
+        let result = uci_manager.raw_uci_cmd(mt, gid, oid, cmd_payload).await.unwrap();
         assert_eq!(result, expected_result);
         assert!(mock_hal.wait_expected_calls_done().await);
     }
@@ -1609,6 +1609,7 @@ mod tests {
         // with SESSION_CONFIG GID.
         // In this case, UciManager should return Error::Unknown.
 
+        let mt = 0x1;
         let gid = 0x0; // CORE GID.
         let oid = 0x1;
         let cmd_payload = vec![0x11, 0x22, 0x33, 0x44];
@@ -1620,7 +1621,7 @@ mod tests {
 
         let (uci_manager, mut mock_hal) = setup_uci_manager_with_open_hal(
             move |hal| {
-                let cmd = UciCommand::RawUciCmd { gid, oid, payload: cmd_payload_clone };
+                let cmd = UciCommand::RawUciCmd { mt, gid, oid, payload: cmd_payload_clone };
                 let resp = into_uci_hal_packets(uwb_uci_packets::SessionSetAppConfigRspBuilder {
                     status,
                     cfg_status,
@@ -1634,7 +1635,7 @@ mod tests {
         .await;
 
         let expected_result = Err(Error::Unknown);
-        let result = uci_manager.raw_uci_cmd(gid, oid, cmd_payload).await;
+        let result = uci_manager.raw_uci_cmd(mt, gid, oid, cmd_payload).await;
         assert_eq!(result, expected_result);
         assert!(mock_hal.wait_expected_calls_done().await);
     }
