@@ -27,9 +27,9 @@ use tokio::task;
 use crate::error::{Error, Result};
 use crate::params::{
     AppConfigTlv, AppConfigTlvType, CapTlv, CoreSetConfigResponse, CountryCode, DeviceConfigId,
-    DeviceConfigTlv, GetDeviceInfoResponse, PowerStats, RawUciMessage, ResetConfig, SessionId,
-    SessionState, SessionType, SessionUpdateActiveRoundsDtTagResponse, SetAppConfigResponse,
-    UpdateMulticastListAction,
+    DeviceConfigTlv, FiraComponent, GetDeviceInfoResponse, PowerStats, RawUciMessage, ResetConfig,
+    SessionId, SessionState, SessionType, SessionUpdateActiveRoundsDtTagResponse,
+    SetAppConfigResponse, UpdateMulticastListAction,
 };
 #[cfg(any(test, feature = "mock-utils"))]
 use crate::uci::mock_uci_manager::MockUciManager;
@@ -333,8 +333,32 @@ impl<U: UciManager> UciManagerSync<U> {
     }
 
     /// Send a raw UCI command.
-    pub fn raw_uci_cmd(&self, gid: u32, oid: u32, payload: Vec<u8>) -> Result<RawUciMessage> {
-        self.runtime_handle.block_on(self.uci_manager.raw_uci_cmd(gid, oid, payload))
+    pub fn raw_uci_cmd(
+        &self,
+        mt: u32,
+        gid: u32,
+        oid: u32,
+        payload: Vec<u8>,
+    ) -> Result<RawUciMessage> {
+        self.runtime_handle.block_on(self.uci_manager.raw_uci_cmd(mt, gid, oid, payload))
+    }
+
+    /// Send a data packet
+    pub fn send_data_packet(
+        &self,
+        session_id: SessionId,
+        address: Vec<u8>,
+        dest_end_point: FiraComponent,
+        uci_sequence_num: u8,
+        app_payload_data: Vec<u8>,
+    ) -> Result<()> {
+        self.runtime_handle.block_on(self.uci_manager.send_data_packet(
+            session_id,
+            address,
+            dest_end_point,
+            uci_sequence_num,
+            app_payload_data,
+        ))
     }
 }
 
