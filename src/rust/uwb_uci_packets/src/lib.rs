@@ -368,10 +368,11 @@ fn is_same_control_packet(header: &UciControlPacketHeader, packet: &UciPacketHal
 }
 
 fn is_device_state_err_control_packet(packet: &UciPacketHal) -> bool {
-    packet.get_message_type() ==  MessageType::Notification.into()
-    && packet.get_group_id_or_data_packet_format() == GroupIdOrDataPacketFormat::Core.into()
-    && get_opcode_from_uci_control_packet(packet) == CoreOpCode::CoreDeviceStatusNtf.into()
-    && packet.clone().to_vec()[UCI_PACKET_HAL_HEADER_LEN] == DeviceState::DeviceStateError.into()
+    packet.get_message_type() == MessageType::Notification.into()
+        && packet.get_group_id_or_data_packet_format() == GroupIdOrDataPacketFormat::Core.into()
+        && get_opcode_from_uci_control_packet(packet) == CoreOpCode::CoreDeviceStatusNtf.into()
+        && packet.clone().to_vec()[UCI_PACKET_HAL_HEADER_LEN]
+            == DeviceState::DeviceStateError.into()
 }
 
 impl UciControlPacket {
@@ -406,8 +407,8 @@ impl TryFrom<Vec<UciPacketHal>> for UciControlPacket {
                 // if DEVICE_STATE_ERROR notification is received while waiting for remaining fragments,
                 // process it and send to upper layer for device recovery
                 if is_device_state_err_control_packet(&packet) {
-                   error!("Received device reset error: {:?}", packet);
-                   return UciControlPacket::parse(
+                    error!("Received device reset error: {:?}", packet);
+                    return UciControlPacket::parse(
                         &UciControlPacketBuilder {
                             message_type: packet.get_message_type(),
                             group_id: packet.get_group_id_or_data_packet_format().into(),
@@ -416,7 +417,7 @@ impl TryFrom<Vec<UciPacketHal>> for UciControlPacket {
                         }
                         .build()
                         .to_bytes(),
-                   );
+                    );
                 }
                 error!("Received unexpected fragment: {:?}", packet);
                 return Err(Error::InvalidPacketError);
@@ -891,6 +892,59 @@ pub fn build_session_update_controller_multicast_list_cmd(
     .build())
 }
 
+/// building Data transfer phase config command
+pub fn build_data_transfer_phase_config_cmd(
+    session_token: u32,
+    dtpcm_repetition: u8,
+    data_transfer_control: u8,
+    dtpml_size: u8,
+    mac_address: Vec<u8>,
+    slot_bitmap: Vec<u8>,
+) -> Result<SessionDataTransferPhaseConfigCmd> {
+    let mut dtpml_buffer = BytesMut::new();
+
+    //calculate mac address mode from data transfer control
+    let mac_address_mode = data_transfer_control & 0x01;
+
+    // Calculate mac address size based on address mode
+    let mac_address_size = match mac_address_mode {
+        SHORT_ADDRESS => 2,
+        EXTENDED_ADDRESS => 8,
+        _ => return Err(Error::InvalidPacketError),
+    };
+
+    // Calculate slot bitmap size from data transfer control
+    let slot_bitmap_size = 1 << ((data_transfer_control & 0x0F) >> 1);
+
+    // Prepare segmented vectors for mac_address
+    let mac_address_vec: Vec<_> =
+        mac_address.chunks(mac_address_size).map(|chunk| chunk.to_owned()).collect();
+
+    // Prepare segmented vectors for slot_bitmap
+    let slot_bitmap_vec: Vec<_> =
+        slot_bitmap.chunks(slot_bitmap_size).map(|chunk| chunk.to_owned()).collect();
+
+    // Validate sizes of mac_address and slot_bitmap
+    if slot_bitmap_vec.len() != dtpml_size.into() || mac_address_vec.len() != dtpml_size.into() {
+        return Err(Error::InvalidPacketError);
+    }
+
+    // Combine segmented vectors into dtpml_buffer
+    for (elem1, elem2) in mac_address_vec.into_iter().zip(slot_bitmap_vec.into_iter()) {
+        dtpml_buffer.extend_from_slice(&elem1);
+        dtpml_buffer.extend_from_slice(&elem2);
+    }
+
+    Ok(SessionDataTransferPhaseConfigCmdBuilder {
+        session_token,
+        dtpcm_repetition,
+        data_transfer_control,
+        dtpml_size,
+        payload: Some(dtpml_buffer.freeze()),
+    }
+    .build())
+}
+
 impl Drop for AppConfigTlv {
     fn drop(&mut self) {
         if self.cfg_id == AppConfigTlvType::VendorId || self.cfg_id == AppConfigTlvType::StaticStsIv
@@ -898,6 +952,68 @@ impl Drop for AppConfigTlv {
             self.v.zeroize();
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PhaseList {
+    ShortMacAddress(Vec<PhaseListShortMacAddress>),
+    ExtendedMacAddress(Vec<PhaseListExtendedMacAddress>),
+}
+
+/// Generate the SessionSetHybridControllerConfig packet.
+pub fn build_session_set_hybrid_controller_config_cmd(
+    session_token: u32,
+    message_control: u8,
+    number_of_phases: u8,
+    update_time: [u8; 8],
+    phase_list: PhaseList,
+) -> Result<SessionSetHybridControllerConfigCmd> {
+    let mut phase_list_buffer = BytesMut::new();
+    match phase_list {
+        PhaseList::ShortMacAddress(phaseListShortMacAddressVec) => {
+            for phaseListShortMacAddress in phaseListShortMacAddressVec {
+                phase_list_buffer.extend_from_slice(
+                    &(phaseListShortMacAddress.session_token.to_le_bytes()[0..4]),
+                );
+                phase_list_buffer.extend_from_slice(
+                    &(phaseListShortMacAddress.start_slot_index.to_le_bytes()[0..2]),
+                );
+                phase_list_buffer.extend_from_slice(
+                    &(phaseListShortMacAddress.end_slot_index.to_le_bytes()[0..2]),
+                );
+                phase_list_buffer.extend_from_slice(std::slice::from_ref(
+                    &phaseListShortMacAddress.phase_participation,
+                ));
+                phase_list_buffer.extend_from_slice(&phaseListShortMacAddress.mac_address);
+            }
+        }
+        PhaseList::ExtendedMacAddress(phaseListExtendedMacAddressVec) => {
+            for phaseListExtendedMacAddress in phaseListExtendedMacAddressVec {
+                phase_list_buffer.extend_from_slice(
+                    &(phaseListExtendedMacAddress.session_token.to_le_bytes()[0..4]),
+                );
+                phase_list_buffer.extend_from_slice(
+                    &(phaseListExtendedMacAddress.start_slot_index.to_le_bytes()[0..2]),
+                );
+                phase_list_buffer.extend_from_slice(
+                    &(phaseListExtendedMacAddress.end_slot_index.to_le_bytes()[0..2]),
+                );
+                phase_list_buffer.extend_from_slice(std::slice::from_ref(
+                    &phaseListExtendedMacAddress.phase_participation,
+                ));
+                phase_list_buffer.extend_from_slice(&phaseListExtendedMacAddress.mac_address);
+            }
+        }
+        _ => return Err(Error::InvalidPacketError),
+    }
+    Ok(SessionSetHybridControllerConfigCmdBuilder {
+        session_token,
+        message_control,
+        number_of_phases,
+        update_time,
+        payload: Some(phase_list_buffer.freeze()),
+    }
+    .build())
 }
 
 // Radar data 'bits per sample' field isn't a raw value, instead it's an enum

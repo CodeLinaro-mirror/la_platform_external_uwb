@@ -24,7 +24,9 @@ use crate::params::uci_packets::{
     UpdateMulticastListAction, UpdateTime,
 };
 use uwb_uci_packets::{
-    build_session_update_controller_multicast_list_cmd, GroupId, MessageType, PhaseList,
+    build_data_transfer_phase_config_cmd, build_session_set_hybrid_controller_config_cmd,
+    build_session_update_controller_multicast_list_cmd, ControleePhaseList, GroupId, MessageType,
+    PhaseList,
 };
 
 /// The enum to represent the UCI commands. The definition of each field should follow UCI spec.
@@ -83,11 +85,24 @@ pub enum UciCommand {
     SessionGetRangingCount {
         session_token: SessionToken,
     },
-    SessionSetHybridConfig {
+    SessionSetHybridControllerConfig {
         session_token: SessionToken,
+        message_control: u8,
         number_of_phases: u8,
         update_time: UpdateTime,
-        phase_list: Vec<PhaseList>,
+        phase_list: PhaseList,
+    },
+    SessionSetHybridControleeConfig {
+        session_token: SessionToken,
+        controlee_phase_list: Vec<ControleePhaseList>,
+    },
+    SessionDataTransferPhaseConfig {
+        session_token: SessionToken,
+        dtpcm_repetition: u8,
+        data_transfer_control: u8,
+        dtpml_size: u8,
+        mac_address: Vec<u8>,
+        slot_bitmap: Vec<u8>,
     },
     AndroidSetCountryCode {
         country_code: CountryCode,
@@ -222,18 +237,45 @@ impl TryFrom<UciCommand> for uwb_uci_packets::UciControlPacket {
             UciCommand::SessionQueryMaxDataSize { session_token } => {
                 uwb_uci_packets::SessionQueryMaxDataSizeCmdBuilder { session_token }.build().into()
             }
-            UciCommand::SessionSetHybridConfig {
+            UciCommand::SessionSetHybridControllerConfig {
                 session_token,
+                message_control,
                 number_of_phases,
                 update_time,
                 phase_list,
-            } => uwb_uci_packets::SessionSetHybridConfigCmdBuilder {
+            } => build_session_set_hybrid_controller_config_cmd(
                 session_token,
+                message_control,
                 number_of_phases,
-                update_time: update_time.into(),
+                update_time.into(),
                 phase_list,
+            )
+            .map_err(|_| Error::BadParameters)?
+            .into(),
+            UciCommand::SessionSetHybridControleeConfig { session_token, controlee_phase_list } => {
+                uwb_uci_packets::SessionSetHybridControleeConfigCmdBuilder {
+                    session_token,
+                    controlee_phase_list,
+                }
+                .build()
+                .into()
             }
-            .build()
+            UciCommand::SessionDataTransferPhaseConfig {
+                session_token,
+                dtpcm_repetition,
+                data_transfer_control,
+                dtpml_size,
+                mac_address,
+                slot_bitmap,
+            } => build_data_transfer_phase_config_cmd(
+                session_token,
+                dtpcm_repetition,
+                data_transfer_control,
+                dtpml_size,
+                mac_address,
+                slot_bitmap,
+            )
+            .map_err(|_| Error::BadParameters)?
             .into(),
         };
         Ok(packet)
