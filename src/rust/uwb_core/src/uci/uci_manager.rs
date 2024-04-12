@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
+use num_traits::FromPrimitive;
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 use crate::error::{Error, Result};
@@ -30,6 +31,7 @@ use crate::params::uci_packets::{
     UciDataPacketHal, UpdateMulticastListAction, UpdateTime,
 };
 use crate::params::utils::{bytes_to_u16, bytes_to_u64};
+use crate::params::UCIMajorVersion;
 use crate::uci::command::UciCommand;
 use crate::uci::message::UciMessage;
 use crate::uci::notification::{
@@ -47,15 +49,6 @@ use uwb_uci_packets::{
     fragment_data_msg_send, ControleePhaseList, PhaseList, RawUciControlPacket, UciDataSnd,
     UciDefragPacket,
 };
-
-// Conditional compilation: In production code, use the "prod" variant of the Aconfig flags
-// library (this only allows reading the flags). When the same uci_manager.rs code is built
-// for unit tests, use the "test" variant of the Aconfig flags library, so that the unit tests
-// have the ability to set the flag value (and the changed value is visible in the code).
-#[cfg(not(test))]
-use uwb_aconfig_flags_rust::parse_cap_tlv_rust_uses_uwbs_uci_version;
-#[cfg(test)]
-use uwb_aconfig_flags_rust_test::parse_cap_tlv_rust_uses_uwbs_uci_version;
 
 const UCI_TIMEOUT_MS: u64 = 2000;
 const MAX_RETRY_COUNT: usize = 3;
@@ -941,13 +934,18 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
         }
     }
 
+    fn get_uwbs_uci_major_version(&mut self) -> Option<u8> {
+        if let Some(core_get_device_info_rsp) = &self.get_device_info_rsp {
+            // Byte 0 : Major UCI version
+            // Calling unwrap() will be safe here as with the bitmask, the value will be within u8.
+            return Some((core_get_device_info_rsp.uci_version & 0xFF).try_into().unwrap());
+        }
+        None
+    }
+
     #[allow(unknown_lints)]
     #[allow(clippy::unnecessary_fallible_conversions)]
     fn store_if_uwbs_caps_info(&mut self, resp: &UciResponse) {
-        if !parse_cap_tlv_rust_uses_uwbs_uci_version() {
-            return;
-        }
-
         if let UciResponse::CoreGetCapsInfo(Ok(tlvs)) = resp {
             if let Some(core_get_device_info_rsp) = &self.get_device_info_rsp {
                 let major_uci_version = core_get_device_info_rsp.uci_version & 0xFF; // Byte 0
@@ -1277,7 +1275,15 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
             UciDefragPacket::Control(packet) => {
                 self.logger.log_uci_response_or_notification(&packet);
 
-                match packet.try_into() {
+                // Use a safe value of Fira 1.x as the UWBS UCI version.
+                let uci_fira_major_version = self.get_uwbs_uci_major_version().unwrap_or(1);
+                match (
+                    packet,
+                    UCIMajorVersion::from_u8(uci_fira_major_version)
+                        .map_or(UCIMajorVersion::V1, |v| v),
+                )
+                    .try_into()
+                {
                     Ok(UciMessage::Response(resp)) => {
                         self.handle_response(resp).await;
                     }
@@ -1361,9 +1367,7 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
             }
             UciNotification::Session(orig_session_notf) => {
                 let mod_session_notf = {
-                    match self
-                        .replace_session_token_with_session_id(orig_session_notf.clone())
-                        .await
+                    match self.add_session_id_to_session_status_ntf(orig_session_notf.clone()).await
                     {
                         Ok(session_notf) => session_notf,
                         Err(e) => {
@@ -1374,6 +1378,7 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
                 };
                 match orig_session_notf {
                     SessionNotification::Status {
+                        session_id: _,
                         session_token,
                         session_state,
                         reason_code: _,
@@ -1428,27 +1433,37 @@ impl<T: UciHal, U: UciLogger> UciManagerActor<T, U> {
     // TODO: Sharing of structs across UCI (PDL) & JNI layer like this makes this ugly. Ideally
     // the struct sent to JNI layer should only contain |session_id| and at uci layer
     // it could be |session_id| or |session_handle|.
-    async fn replace_session_token_with_session_id(
+    async fn add_session_id_to_session_status_ntf(
         &self,
         session_notification: SessionNotification,
     ) -> Result<SessionNotification> {
         match session_notification {
-            SessionNotification::Status { session_token, session_state, reason_code } => {
-                Ok(SessionNotification::Status {
-                    session_token: self.get_session_id(&session_token).await?,
-                    session_state,
-                    reason_code,
-                })
-            }
-            SessionNotification::UpdateControllerMulticastList {
+            SessionNotification::Status {
+                session_id: _,
+                session_token,
+                session_state,
+                reason_code,
+            } => Ok(SessionNotification::Status {
+                session_id: self.get_session_id(&session_token).await?,
+                session_token,
+                session_state,
+                reason_code,
+            }),
+            SessionNotification::UpdateControllerMulticastListV1 {
                 session_token,
                 remaining_multicast_list_size,
                 status_list,
-            } => Ok(SessionNotification::UpdateControllerMulticastList {
+            } => Ok(SessionNotification::UpdateControllerMulticastListV1 {
                 session_token: self.get_session_id(&session_token).await?,
                 remaining_multicast_list_size,
                 status_list,
             }),
+            SessionNotification::UpdateControllerMulticastListV2 { session_token, status_list } => {
+                Ok(SessionNotification::UpdateControllerMulticastListV2 {
+                    session_token: self.get_session_id(&session_token).await?,
+                    status_list,
+                })
+            }
             SessionNotification::SessionInfo(session_range_data) => {
                 Ok(SessionNotification::SessionInfo(SessionRangeData {
                     sequence_number: session_range_data.sequence_number,
@@ -1670,7 +1685,6 @@ mod tests {
     use crate::uci::notification::RadarSweepData;
     use crate::uci::uci_logger::NopUciLogger;
     use crate::utils::init_test_logging;
-    use uwb_aconfig_flags_rust_test::set_parse_cap_tlv_rust_uses_uwbs_uci_version;
 
     fn into_uci_hal_packets<T: Into<uwb_uci_packets::UciControlPacket>>(
         builder: T,
@@ -2261,7 +2275,7 @@ mod tests {
         assert!(mock_hal.wait_expected_calls_done().await);
     }
 
-   #[tokio::test]
+    #[tokio::test]
     async fn test_session_set_hybrid_controller_config_ok() {
         let session_id = 0x123;
         let message_control = 0x00;
@@ -2379,7 +2393,7 @@ mod tests {
         assert!(mock_hal.wait_expected_calls_done().await);
     }
 
-   #[tokio::test]
+    #[tokio::test]
     async fn test_session_set_hybrid_controlee_config_ok() {
         let session_id = 0x123;
         let session_token = 0x123;
@@ -2415,7 +2429,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(mock_hal.wait_expected_calls_done().await);
     }
-    
+
     #[tokio::test]
     async fn test_session_data_transfer_phase_config_ok() {
         let session_id = 0x123;
@@ -3517,8 +3531,8 @@ mod tests {
     // fragment size is based on a default value (MAX_PAYLOAD_LEN).
     #[tokio::test]
     async fn test_data_packet_send_fragmented_packet_ok_uses_default_fragment_size() {
-        // Set flag to "false" for this unit test (it checks behavior of using a default value).
-        set_parse_cap_tlv_rust_uses_uwbs_uci_version(false);
+        // Don't setup UWBS returning a response to CORE_GET_DEVICE_INFO and CORE_GET_CAPS_INFO;
+        // this simulates the scenario of the default UCI data packet fragment size being used.
 
         // Test Data packet send for a set of data packet fragments (on a UWB session).
         let mt_data = 0x0;
@@ -3609,9 +3623,6 @@ mod tests {
         uci_version: u16,
         uwbs_caps_info_tlv: CapTlv,
     ) {
-        // Set the flag to true for this unit test.
-        set_parse_cap_tlv_rust_uses_uwbs_uci_version(true);
-
         let status = StatusCode::UciStatusOk;
         let mac_version = 0;
         let phy_version = 0;
