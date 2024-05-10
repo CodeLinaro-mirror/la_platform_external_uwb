@@ -99,7 +99,6 @@ rust_defaults {
         "libnum_derive",
     ],
     min_sdk_version: "Tiramisu",
-    host_supported: true,
 }
 
 // Build uwb_core library with the production version of Aconfig flags lib.
@@ -120,6 +119,7 @@ rust_library {
     crate_name: "uwb_core",
     features: ["mock-utils"],
     host_supported: true,
+    native_coverage: false,
 }
 
 // The test target uses the test version of Aconfig flags lib, as that has
@@ -138,22 +138,6 @@ rust_test {
                 "mts-uwb"
             ],
             test_config_template: "uwb_rust_test_config_template.xml",
-        },
-        host: {
-            test_suites: [
-                "general-tests",
-            ],
-            data_libs: [
-                "libandroid_runtime_lazy",
-                "libbase",
-                "libcutils",
-                "liblog",
-                "libutils",
-                "libc++",
-                "server_configurable_flags",
-            ],
-            // See b/268061150
-            stem: "libuwb_core_tests_host",
         },
     },
     // Support multilib variants (using different suffix per sub-architecture), which is needed on
@@ -188,7 +172,6 @@ rust_binary {
     lints: "android",
     clippy_lints: "android",
     min_sdk_version: "Tiramisu",
-    host_supported: true,
 }
 
 // Build the uwb_core library with "proto" feature enabled.
@@ -208,6 +191,7 @@ rust_library {
     ],
     features: ["proto"],
     host_supported: true,
+    native_coverage: false,
 }
 
 genrule {
@@ -284,7 +268,6 @@ rust_defaults {
         "com.android.uwb",
     ],
     min_sdk_version: "Tiramisu",
-    host_supported: true,
     srcs: [
         "rust/uci_hal_android/lib.rs",
     ],
@@ -307,6 +290,7 @@ rust_library {
     rustlibs: [
         "libuwb_core_with_mock",
     ],
+    native_coverage: false,
 }
 
 rust_test {
@@ -324,23 +308,6 @@ rust_test {
                 "mts-uwb"
             ],
             test_config_template: "uwb_rust_test_config_template.xml",
-        },
-        host: {
-            test_suites: [
-                "general-tests",
-            ],
-            data_libs: [
-                "libandroid_runtime_lazy",
-                "libbase",
-                "libcutils",
-                "liblog",
-                "libutils",
-                "libbinder_ndk",
-                "libbinder",
-                "libc++",
-            ],
-            // See b/268061150
-            stem: "libuci_hal_android_tests_host",
         },
     },
     // Support multilib variants (using different suffix per sub-architecture), which is needed on
