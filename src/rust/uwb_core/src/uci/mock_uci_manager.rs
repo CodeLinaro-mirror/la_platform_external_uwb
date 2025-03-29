@@ -29,12 +29,11 @@ use crate::error::{Error, Result};
 use crate::params::uci_packets::{
     app_config_tlvs_eq, device_config_tlvs_eq, radar_config_tlvs_eq, rf_test_config_tlvs_eq,
     AndroidRadarConfigResponse, AppConfigTlv, AppConfigTlvType, CapTlv, ControleePhaseList,
-    Controlees, CoreSetConfigResponse, CountryCode, DeviceConfigId, DeviceConfigTlv,
-    GetDeviceInfoResponse, PhaseList, PowerStats, RadarConfigTlv, RadarConfigTlvType,
+    Controlees, ControllerPhaseList, CoreSetConfigResponse, CountryCode, DeviceConfigId,
+    DeviceConfigTlv, GetDeviceInfoResponse, PowerStats, RadarConfigTlv, RadarConfigTlvType,
     RawUciMessage, ResetConfig, RfTestConfigResponse, RfTestConfigTlv, SessionId, SessionState,
     SessionToken, SessionType, SessionUpdateControllerMulticastResponse,
     SessionUpdateDtTagRangingRoundsResponse, SetAppConfigResponse, UpdateMulticastListAction,
-    UpdateTime,
 };
 use crate::uci::notification::{
     CoreNotification, DataRcvNotification, RadarDataRcvNotification, RfTestNotification,
@@ -462,18 +461,14 @@ impl MockUciManager {
     pub fn expect_session_set_hybrid_controller_config(
         &mut self,
         expected_session_id: SessionId,
-        expected_message_control: u8,
         expected_number_of_phases: u8,
-        expected_update_time: UpdateTime,
-        expected_phase_list: PhaseList,
+        expected_phase_list: Vec<ControllerPhaseList>,
         out: Result<()>,
     ) {
         self.expected_calls.lock().unwrap().push_back(
             ExpectedCall::SessionSetHybridControllerConfig {
                 expected_session_id,
-                expected_message_control,
                 expected_number_of_phases,
-                expected_update_time,
                 expected_phase_list,
                 out,
             },
@@ -556,6 +551,23 @@ impl MockUciManager {
         out: Result<()>,
     ) {
         self.expected_calls.lock().unwrap().push_back(ExpectedCall::TestPeriodicTx {
+            expected_psdu_data,
+            notfs,
+            out,
+        });
+    }
+
+    /// Prepare Mock to expect rf_test_per_rx.
+    ///
+    /// MockUciManager expects call with parameters, returns out as response, followed by notfs
+    /// sent.
+    pub fn expect_test_per_rx(
+        &mut self,
+        expected_psdu_data: Vec<u8>,
+        notfs: Vec<UciNotification>,
+        out: Result<()>,
+    ) {
+        self.expected_calls.lock().unwrap().push_back(ExpectedCall::TestPerRx {
             expected_psdu_data,
             notfs,
             out,
@@ -1214,24 +1226,18 @@ impl UciManager for MockUciManager {
     async fn session_set_hybrid_controller_config(
         &self,
         session_id: SessionId,
-        message_control: u8,
         number_of_phases: u8,
-        update_time: UpdateTime,
-        phase_lists: PhaseList,
+        phase_lists: Vec<ControllerPhaseList>,
     ) -> Result<()> {
         let mut expected_calls = self.expected_calls.lock().unwrap();
         match expected_calls.pop_front() {
             Some(ExpectedCall::SessionSetHybridControllerConfig {
                 expected_session_id,
-                expected_message_control,
                 expected_number_of_phases,
-                expected_update_time,
                 expected_phase_list,
                 out,
             }) if expected_session_id == session_id
-                && expected_message_control == message_control
                 && expected_number_of_phases == number_of_phases
-                && expected_update_time == update_time
                 && expected_phase_list == phase_lists =>
             {
                 self.expect_call_consumed.notify_one();
@@ -1308,6 +1314,24 @@ impl UciManager for MockUciManager {
                 self.send_notifications(notfs);
                 out
             }
+            Some(call) => {
+                expected_calls.push_front(call);
+                Err(Error::MockUndefined)
+            }
+            None => Err(Error::MockUndefined),
+        }
+    }
+
+    async fn rf_test_per_rx(&self, psdu_data: Vec<u8>) -> Result<()> {
+        let mut expected_calls = self.expected_calls.lock().unwrap();
+        match expected_calls.pop_front() {
+            Some(ExpectedCall::TestPerRx { expected_psdu_data, notfs, out })
+            if expected_psdu_data == psdu_data =>
+                {
+                    self.expect_call_consumed.notify_one();
+                    self.send_notifications(notfs);
+                    out
+                }
             Some(call) => {
                 expected_calls.push_front(call);
                 Err(Error::MockUndefined)
@@ -1456,10 +1480,8 @@ enum ExpectedCall {
     },
     SessionSetHybridControllerConfig {
         expected_session_id: SessionId,
-        expected_message_control: u8,
         expected_number_of_phases: u8,
-        expected_update_time: UpdateTime,
-        expected_phase_list: PhaseList,
+        expected_phase_list: Vec<ControllerPhaseList>,
         out: Result<()>,
     },
     SessionSetHybridControleeConfig {
@@ -1484,6 +1506,11 @@ enum ExpectedCall {
         out: Result<RfTestConfigResponse>,
     },
     TestPeriodicTx {
+        expected_psdu_data: Vec<u8>,
+        notfs: Vec<UciNotification>,
+        out: Result<()>,
+    },
+    TestPerRx {
         expected_psdu_data: Vec<u8>,
         notfs: Vec<UciNotification>,
         out: Result<()>,
