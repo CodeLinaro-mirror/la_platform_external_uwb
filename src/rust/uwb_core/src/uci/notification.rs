@@ -127,6 +127,8 @@ pub enum RfTestNotification {
         /// It's not at FiRa specification, only used by vendor's extension.
         raw_notification_data: Vec<u8>,
     },
+    /// TestPerRxNtf equivalent
+    TestPerRxNtf(RfTestPerRxData),
 }
 
 /// The session range data.
@@ -144,6 +146,9 @@ pub struct SessionRangeData {
     /// The ranging measurement type.
     pub ranging_measurement_type: RangingMeasurementType,
 
+    /// Hus primary session Session Id
+    pub hus_primary_session_id: SessionToken,
+
     /// The ranging measurement data.
     pub ranging_measurements: RangingMeasurements,
 
@@ -153,6 +158,56 @@ pub struct SessionRangeData {
     /// The raw data of the notification message.
     /// (b/243555651): It's not at FiRa specification, only used by vendor's extension.
     pub raw_ranging_data: Vec<u8>,
+}
+
+/// PER RX NTF Data
+#[derive(Debug, Clone, PartialEq)]
+pub struct RfTestPerRxData {
+    /// Status
+    pub status: StatusCode,
+
+    /// Number of RX attempts.
+    pub attempts: u32,
+
+    /// Number of times signal was detected.
+    pub acq_detect: u32,
+
+    /// Number of times signal was rejected.
+    pub acq_reject: u32,
+
+    /// Number of times RX did not go beyound ACQ stage.
+    pub rx_fail: u32,
+
+    /// Number of times sync CIR ready event was received.
+    pub sync_cir_ready: u32,
+
+    /// Number of times RX was stuck at either ACQ detect or sync CIR ready.
+    pub sfd_fail: u32,
+
+    /// Number of times SFD was found.
+    pub sfd_found: u32,
+
+    /// Number of times PHR decode failed.
+    pub phr_dec_error: u32,
+
+    /// Number of times PHR bits in error.
+    pub phr_bit_error: u32,
+
+    /// Number of times payload decode failed.
+    pub psdu_dec_error: u32,
+
+    /// Number of times payload bits in error.
+    pub psdu_bit_error: u32,
+
+    /// Number of times STS detection was successful.
+    pub sts_found: u32,
+
+    /// Number of times end of frame event was triggered.
+    pub eof: u32,
+
+    /// The raw data of the notification message.
+    /// It's not at FiRa specification, only used by vendor's extension.
+    pub raw_notification_data: Vec<u8>,
 }
 
 /// The ranging measurements.
@@ -606,6 +661,7 @@ impl TryFrom<uwb_uci_packets::SessionInfoNtf> for SessionNotification {
             session_token: evt.get_session_token(),
             current_ranging_interval_ms: evt.get_current_ranging_interval(),
             ranging_measurement_type: evt.get_ranging_measurement_type(),
+            hus_primary_session_id: evt.get_hus_primary_session_id(),
             ranging_measurements,
             rcr_indicator: evt.get_rcr_indicator(),
             raw_ranging_data,
@@ -648,6 +704,23 @@ impl TryFrom<uwb_uci_packets::TestNotification> for RfTestNotification {
                 status: evt.get_status(),
                 raw_notification_data: raw_ntf_data,
             }),
+            TestNotificationChild::TestPerRxNtf(evt) => Ok(Self::TestPerRxNtf (RfTestPerRxData {
+                status: evt.get_status(),
+                attempts: evt.get_attempts(),
+                acq_detect: evt.get_acq_detect(),
+                acq_reject: evt.get_acq_reject(),
+                rx_fail: evt.get_rx_fail(),
+                sync_cir_ready: evt.get_sync_cir_ready(),
+                sfd_fail: evt.get_sfd_fail(),
+                sfd_found: evt.get_sfd_found(),
+                phr_dec_error: evt.get_phr_dec_error(),
+                phr_bit_error: evt.get_phr_bit_error(),
+                psdu_dec_error: evt.get_psdu_dec_error(),
+                psdu_bit_error: evt.get_psdu_bit_error(),
+                sts_found: evt.get_sts_found(),
+                eof: evt.get_eof(),
+                raw_notification_data: raw_ntf_data,
+            })),
             _ => {
                 error!("Unknown RfTestNotification: {:?}", evt);
                 Err(Error::Unknown)
@@ -797,6 +870,7 @@ mod tests {
                 session_token: 0x11,
                 rcr_indicator: 0x12,
                 current_ranging_interval: 0x13,
+                hus_primary_session_id: 0x00,
                 two_way_ranging_measurements: vec![extended_measurement.clone()],
                 vendor_data: vec![],
             }
@@ -815,6 +889,7 @@ mod tests {
                 sequence_number: 0x10,
                 session_token: 0x11,
                 ranging_measurement_type: uwb_uci_packets::RangingMeasurementType::TwoWay,
+                hus_primary_session_id: 0x00,
                 current_ranging_interval_ms: 0x13,
                 ranging_measurements: RangingMeasurements::ExtendedAddressTwoWay(vec![
                     extended_measurement
@@ -848,6 +923,7 @@ mod tests {
             session_token: 0x11,
             rcr_indicator: 0x12,
             current_ranging_interval: 0x13,
+            hus_primary_session_id: 0x00,
             two_way_ranging_measurements: vec![short_measurement.clone()],
             vendor_data: vec![0x02, 0x01],
         }
@@ -866,6 +942,7 @@ mod tests {
                 sequence_number: 0x10,
                 session_token: 0x11,
                 ranging_measurement_type: uwb_uci_packets::RangingMeasurementType::TwoWay,
+                hus_primary_session_id: 0x00,
                 current_ranging_interval_ms: 0x13,
                 ranging_measurements: RangingMeasurements::ShortAddressTwoWay(vec![
                     short_measurement
@@ -895,6 +972,7 @@ mod tests {
                 session_token: 0x11,
                 rcr_indicator: 0x12,
                 current_ranging_interval: 0x13,
+                hus_primary_session_id: 0x00,
                 owr_aoa_ranging_measurements: vec![extended_measurement.clone()],
                 vendor_data: vec![],
             }
@@ -913,6 +991,7 @@ mod tests {
                 sequence_number: 0x10,
                 session_token: 0x11,
                 ranging_measurement_type: uwb_uci_packets::RangingMeasurementType::OwrAoa,
+                hus_primary_session_id: 0x00,
                 current_ranging_interval_ms: 0x13,
                 ranging_measurements: RangingMeasurements::ExtendedAddressOwrAoa(
                     extended_measurement
@@ -941,6 +1020,7 @@ mod tests {
             session_token: 0x11,
             rcr_indicator: 0x12,
             current_ranging_interval: 0x13,
+            hus_primary_session_id: 0x00,
             owr_aoa_ranging_measurements: vec![short_measurement.clone()],
             vendor_data: vec![],
         }
@@ -959,6 +1039,7 @@ mod tests {
                 sequence_number: 0x10,
                 session_token: 0x11,
                 ranging_measurement_type: uwb_uci_packets::RangingMeasurementType::OwrAoa,
+                hus_primary_session_id: 0x00,
                 current_ranging_interval_ms: 0x13,
                 ranging_measurements: RangingMeasurements::ShortAddressOwrAoa(short_measurement),
                 rcr_indicator: 0x12,
@@ -1252,6 +1333,7 @@ mod tests {
         let short_mac_dl_tdoa_session_info_ntf =
             uwb_uci_packets::ShortMacDlTDoASessionInfoNtfBuilder {
                 current_ranging_interval: 0x13,
+                hus_primary_session_id: 0x00,
                 dl_tdoa_measurements: dl_tdoa_measurements.clone(),
                 no_of_ranging_measurements: 1,
                 rcr_indicator: 0x12,
@@ -1277,6 +1359,7 @@ mod tests {
                 session_token: 0x11,
                 ranging_measurement_type: uwb_uci_packets::RangingMeasurementType::DlTdoa,
                 current_ranging_interval_ms: 0x13,
+                hus_primary_session_id: 0x00,
                 ranging_measurements: RangingMeasurements::ShortAddressDltdoa(short_measurement),
                 rcr_indicator: 0x12,
                 raw_ranging_data,
@@ -1306,6 +1389,7 @@ mod tests {
         let extended_mac_dl_tdoa_session_info_ntf =
             uwb_uci_packets::ExtendedMacDlTDoASessionInfoNtfBuilder {
                 current_ranging_interval: 0x13,
+                hus_primary_session_id: 0x00,
                 dl_tdoa_measurements: dl_tdoa_measurements.clone(),
                 no_of_ranging_measurements: 1,
                 rcr_indicator: 0x12,
@@ -1332,6 +1416,7 @@ mod tests {
                 session_token: 0x11,
                 ranging_measurement_type: uwb_uci_packets::RangingMeasurementType::DlTdoa,
                 current_ranging_interval_ms: 0x13,
+                hus_primary_session_id: 0x00,
                 ranging_measurements: RangingMeasurements::ExtendedAddressDltdoa(short_measurement),
                 rcr_indicator: 0x12,
                 raw_ranging_data,
@@ -1468,6 +1553,69 @@ mod tests {
                 status,
                 raw_notification_data
             })
+        );
+    }
+
+    #[test]
+    fn test_rf_test_notification_casting_from_rf_per_rx_ntf() {
+        let test_per_rx_ntf_packet = uwb_uci_packets::TestPerRxNtfBuilder {
+            status: uwb_uci_packets::StatusCode::UciStatusOk,
+            attempts: 1,
+            acq_detect: 2,
+            acq_reject: 3,
+            rx_fail: 4,
+            sync_cir_ready: 5,
+            sfd_fail: 6,
+            sfd_found: 7,
+            phr_dec_error: 8,
+            phr_bit_error: 9,
+            psdu_dec_error: 10,
+            psdu_bit_error: 11,
+            sts_found: 12,
+            eof: 13,
+            vendor_data: vec![],
+        }
+            .build();
+        let raw_notification_data = test_per_rx_ntf_packet.clone().encode_to_bytes().unwrap()
+            [UCI_PACKET_HEADER_LEN..]
+            .to_vec();
+        let rf_test_notification =
+            uwb_uci_packets::TestNotification::try_from(test_per_rx_ntf_packet).unwrap();
+        let uci_notification = RfTestNotification::try_from(rf_test_notification).unwrap();
+        let uci_notification_from_per_rx_ntf = UciNotification::RfTest(uci_notification);
+        let status = uwb_uci_packets::StatusCode::UciStatusOk;
+        let attempts = 1;
+        let acq_detect = 2;
+        let acq_reject = 3;
+        let rx_fail = 4;
+        let sync_cir_ready = 5;
+        let sfd_fail = 6;
+        let sfd_found = 7;
+        let phr_dec_error = 8;
+        let phr_bit_error = 9;
+        let psdu_dec_error = 10;
+        let psdu_bit_error = 11;
+        let sts_found = 12;
+        let eof = 13;
+        assert_eq!(
+            uci_notification_from_per_rx_ntf,
+            UciNotification::RfTest(RfTestNotification::TestPerRxNtf(RfTestPerRxData {
+                status,
+                attempts,
+                acq_detect,
+                acq_reject,
+                rx_fail,
+                sync_cir_ready,
+                sfd_fail,
+                sfd_found,
+                phr_dec_error,
+                phr_bit_error,
+                psdu_dec_error,
+                psdu_bit_error,
+                sts_found,
+                eof,
+                raw_notification_data
+            }))
         );
     }
 }
